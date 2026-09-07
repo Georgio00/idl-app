@@ -1,0 +1,28 @@
+# PySide6 6.11.1 fails to import on at least one dev machine here
+# (ImportError: DLL load failed while importing QtCore / QtWidgets —
+# WinError 127, reproduced even loading Qt6Core.dll directly via ctypes,
+# survived a VC++ redistributable reinstall + reboot). 6.7.3 works. Pin
+# until that's root-caused; try relaxing if setting up on a fresh machine.
+PySide6==6.7.3
+opencv-python-headless>=4.9
+numpy>=1.26
+Pillow>=10.0
+cryptography>=42.0
+reportlab>=4.0
+
+# OCR engine — Tesseract (offline, no API calls, no images leaving the
+# machine). Requires the Tesseract binary installed separately (NOT just
+# this pip package) with the Arabic language pack — see README.md.
+pytesseract>=0.3.10
+
+# PDF upload support (scanned ID documents, not just photos). Requires the
+# poppler binaries installed separately (NOT just this pip package) — same
+# category of gotcha as the Tesseract binary above. See README.md.
+pdf2image>=1.17
+
+# Second OCR engine, used only for the passport (see ocr/easyocr_client.py's
+# docstring for why: Tesseract can't read text over the passport's
+# anti-counterfeiting security pattern, EasyOCR can). Pulls in PyTorch as a
+# dependency — a large install (several hundred MB); model weights download
+# on first use and are cached offline after that.
+easyocr>=1.7

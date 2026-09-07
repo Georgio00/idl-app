@@ -1,0 +1,51 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Real ID photos used for local OCR testing — never commit these
+test_samples/
+
+# Local app data (encrypted DB, encryption key, print layout) — this app
+# stores these under %LOCALAPPDATA%\IDL_APP\, not the repo, but ignore any
+# that end up here anyway (e.g. a stray db/*.db from manual testing)
+*.db
+*.key
+secret.key
+
+# Google Cloud Vision service-account key (2026-08-24 OCR engine switch) —
+# this JSON file is a live credential, never commit it
+credentials/
+
+# Stray shell-redirect debug captures (e.g. `python gui\new_idl_form.py
+# *> ocr_debug_log.txt`) -- these land in the project root by accident and
+# have been found to contain real OCR debug output for real ID documents
+# (MRZ lines, names) in plain text. 2026-09-07: found two pre-existing ones
+# (ocr_debug_log.txt, ocr_debug_log2.txt) already sitting in this folder
+# when version control was set up -- deliberately left untracked/never
+# committed, see the git setup notes for why. Delete these from the actual
+# folder; they should never have been kept around in the first place.
+ocr_debug_log*.txt
+*_debug_log*.txt
+
+# Application logs (2026-09-07 audit trail feature) -- like the DB, these
+# live under %LOCALAPPDATA%\IDL_APP\logs\, not the repo, but ignore any
+# that land here anyway.
+logs/
+*.log
+
+# PyInstaller build output (2026-09-07 packaging) -- generated, not source.
+build/
+dist/
+*.spec.bak
+
+# Editor/OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
