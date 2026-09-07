@@ -124,5 +124,23 @@ class Storage:
             records.append(IdlRecord(id=rid, created_at=created_at, fields=fields))
         return records
 
+    def update_record(self, record_id: int, fields: dict) -> None:
+        """2026-09-07: added for the Records screen's Open-then-Save-again
+        flow (reprints and corrections) — previously save_record's plain
+        INSERT was the only write path, so re-saving an already-saved
+        record silently created a SECOND row instead of correcting the
+        first. Raises ValueError for an unknown id rather than silently
+        no-op'ing (an UPDATE ... WHERE id=? that matches nothing looks
+        successful at the SQL level but would hide a real bug — e.g. a
+        stale id from a record deleted by another process)."""
+        plaintext = json.dumps(fields, ensure_ascii=False).encode("utf-8")
+        encrypted = self._fernet.encrypt(plaintext)
+        cur = self._conn.execute(
+            "UPDATE idl_records SET encrypted_fields = ? WHERE id = ?", (encrypted, record_id)
+        )
+        self._conn.commit()
+        if cur.rowcount == 0:
+            raise ValueError(f"No IDL record with id {record_id} exists")
+
     def close(self):
         self._conn.close()

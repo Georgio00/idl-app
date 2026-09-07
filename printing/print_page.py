@@ -79,3 +79,25 @@ def values_from_form_fields(form_fields: dict, held_idp_categories: set[str]) ->
     for cat in ("A", "B", "C", "D", "E"):
         values[f"category_{cat}"] = "X" if cat in held_idp_categories else ""
     return values
+
+
+def render_idl_data_page(field_values: dict, output_path: str, layout: dict | None = None) -> None:
+    """Shared entry point for "given a New IDL field dict, produce the
+    print-ready PDF" -- extracted 2026-09-07 out of
+    gui/new_idl_form.py's print_preview so the Records screen's Reprint
+    action (see gui/records_screen.py) doesn't have to re-implement the
+    same category-parsing/nationality-default steps a second time and
+    risk the two drifting apart. field_values works the same whether it
+    came from the live form (plain strings) or a saved IdlRecord's
+    `.fields` dict (also plain strings, see db/storage.py) -- either way
+    it's the same shape values_from_form_fields already accepts.
+
+    2026-08-27's nationality hardcode (see the comment this replaced in
+    new_idl_form.py) is preserved here rather than resolved: the form
+    still has no Nationality field of its own, and every record this app
+    handles is a Lebanese driving license holder."""
+    category_text = field_values.get("Original Document.Category", "")
+    held_categories = {c.strip() for c in category_text.split(",") if c.strip()}
+    values = values_from_form_fields(field_values, held_categories)
+    values["nationality"] = "LEBANESE"
+    render_data_page(values, output_path, layout=layout)
