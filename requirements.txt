@@ -10,19 +10,33 @@ Pillow>=10.0
 cryptography>=42.0
 reportlab>=4.0
 
-# OCR engine — Tesseract (offline, no API calls, no images leaving the
-# machine). Requires the Tesseract binary installed separately (NOT just
-# this pip package) with the Arabic language pack — see README.md.
-pytesseract>=0.3.10
+# OCR engine — Google Cloud Vision (current, since 2026-08-24; see
+# ocr/ocr_client.py's module docstring for the full switch history). This
+# entry was missing from this file entirely until 2026-09-07 -- a fresh
+# `pip install -r requirements.txt` genuinely could not run the app's real
+# OCR path, since ocr_client.py imports google.cloud.vision, not
+# pytesseract. Requires a Google Cloud project with the Vision API enabled
+# and billing set up, plus GOOGLE_APPLICATION_CREDENTIALS pointing at a
+# service-account key — see README.md's "Google Cloud Vision setup"
+# section, NOT a local binary install like the two entries below.
+google-cloud-vision>=3.7
 
 # PDF upload support (scanned ID documents, not just photos). Requires the
-# poppler binaries installed separately (NOT just this pip package) — same
-# category of gotcha as the Tesseract binary above. See README.md.
+# poppler binaries installed separately (NOT just this pip package) — see
+# README.md.
 pdf2image>=1.17
 
-# Second OCR engine, used only for the passport (see ocr/easyocr_client.py's
-# docstring for why: Tesseract can't read text over the passport's
-# anti-counterfeiting security pattern, EasyOCR can). Pulls in PyTorch as a
-# dependency — a large install (several hundred MB); model weights download
-# on first use and are cached offline after that.
-easyocr>=1.7
+# NOT required to run the app as of 2026-08-24's OCR engine switch — kept
+# here, commented out, only because ocr/easyocr_client.py and
+# ocr/passport_ocr.py's docstrings document it as a possible fallback path
+# if Vision's passport-photo accuracy ever regresses (see those modules).
+# Uncomment only if actually reverting to that fallback; leaving it active
+# by default would mean every fresh setup pulls in PyTorch (several
+# hundred MB) for a code path nothing currently calls.
+# pytesseract>=0.3.10
+# easyocr>=1.7
+
+# Only needed to build packaging/idl_app.spec into a distributable .exe
+# (see packaging/build_installer.bat) — not needed to run the app from
+# source.
+# pyinstaller>=6.0
