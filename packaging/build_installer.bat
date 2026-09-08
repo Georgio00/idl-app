@@ -32,5 +32,8 @@ echo Before running it on a new machine, that machine still needs:
 echo   1. Poppler installed and on PATH (PDF upload support -- see README.md)
 echo   2. GOOGLE_APPLICATION_CREDENTIALS set to a valid service-account key
 echo      (OCR -- see README.md's Google Cloud Vision setup section)
+echo   3. SumatraPDF installed (direct-to-printer Print/Reprint -- see
+echo      README.md's Printing setup section), and a printer picked via
+echo      the app's own "Printer Settings..." button
 
 endlocal

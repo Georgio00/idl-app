@@ -82,6 +82,37 @@ program, **poppler**, which pdf2image just shells out to:
 If a PDF fails to load in the app, the error message will mention poppler —
 that's this dependency, not a bug in the PDF itself.
 
+**Printing setup (2026-09-08):** the "Print" button (and the Records
+screen's "Reprint") send a page directly to a specific printer, silently —
+no dialog, no PDF viewer popping up. This is separate from "Print
+Preview", which still just opens the PDF so staff can check it visually
+and needs no extra setup.
+
+Sending directly to a printer needs **SumatraPDF**, a small free portable
+PDF tool, installed on the machine (see `printing/print_dispatch.py`'s
+module docstring for why this particular tool):
+
+1. Download it from the official site: https://www.sumatrapdfreader.org/download-free-pdf-reader
+   — the plain installer is fine, or the portable .exe if you'd rather not
+   install anything.
+2. If it doesn't end up on PATH and isn't in one of the usual
+   `C:\Program Files\SumatraPDF\` locations, set the
+   `IDL_APP_SUMATRA_PATH` environment variable to its full `.exe` path
+   (same pattern as the old `TESSERACT_CMD` override).
+3. In the app, click **"Printer Settings..."** and pick (or type) the
+   name of the printer that has blank IDP booklet pages loaded. This is
+   saved per machine — staff don't need to set it again after that.
+
+**This has not yet been verified against a real printer** — it was built
+and tested with the actual print call mocked out, from a machine with no
+printer attached at all. The first real print needs to be watched in
+person to confirm SumatraPDF's silent-print flags behave as documented
+against your actual printer driver, and to confirm the page positions
+line up — which additionally still depends on `printing/layout_config.py`'s
+placeholder page size being replaced with a real measurement (see "What's
+still open" below); until that's done, treat "Print" as functionally
+wired up but not yet trustworthy for a real booklet page.
+
 ## Running
 
 ```bash
@@ -117,21 +148,24 @@ issues showed up and are both worth knowing about if you hit
   - `license_fields.py` — field definitions + Lebanese→IDP category mapping (`categories_to_idp`).
   - `pipeline.py` — merges passport + license OCR output into the form's fields per the brief's source-priority rules.
 - **`gui/`**
-  - `new_idl_form.py` — the "New IDL" screen: form fields on the left, three labeled upload boxes (Passport / License Front / License Back) on the right, plus "Find / Reprint Record...", "New", Save, and Print Preview. The Autofill button is disabled until all three photos are filled, then runs `ocr.pipeline` on a background thread and flags low-confidence fields in orange.
-  - `records_screen.py` — searchable dialog listing every saved record; Open loads one back into the main form for editing/re-saving (Save then updates that row instead of inserting a new one), Reprint re-renders its print PDF directly.
+  - `new_idl_form.py` — the "New IDL" screen: form fields on the left, three labeled upload boxes (Passport / License Front / License Back) on the right, plus "Find / Reprint Record...", "Printer Settings...", "New", Save, Print Preview, and Print. The Autofill button is disabled until all three photos are filled, then runs `ocr.pipeline` on a background thread and flags low-confidence fields in orange.
+  - `records_screen.py` — searchable dialog listing every saved record; Open loads one back into the main form for editing/re-saving (Save then updates that row instead of inserting a new one), Reprint sends it directly to the configured printer.
+  - `printer_settings_dialog.py` — pick (or type) which installed printer gets used by Print / Reprint; saved per machine via `printing/printer_config.py`.
   - `image_upload_box.py` — the square upload widget: click-to-browse, drag-and-drop, thumbnail preview, Remove button. Accepts images directly or PDFs (routed through `pdf_utils.py`); either way `image_path` ends up pointing at a plain image file, so the OCR pipeline never needs to know which it was.
   - `pdf_utils.py` — thin wrapper around pdf2image (page count, single-page render, thumbnail render).
   - `pdf_page_picker.py` — the "click the right page" dialog shown when a dropped PDF has more than one page.
   - `calibration_screen.py` — click-and-drag tool to set print field positions over a real page photo, saved to `printing/layout_config.py`'s stored layout.
 - **`db/`**
   - `storage.py` — local SQLite store. Records are encrypted at rest with Fernet (see the module docstring for why Fernet over SQLCipher). DB file and encryption key live in `%LOCALAPPDATA%\IDL_APP\`, never in the repo.
-  - `audit_log.py` — always-on, persistent audit trail (app starts, autofill runs, record saves with a before/after diff of corrected fields, prints) at `%LOCALAPPDATA%\IDL_APP\logs\audit.log`. See the module docstring for what it records and its (deliberate) plain-text-at-rest trade-off.
+  - `audit_log.py` — always-on, persistent audit trail (app starts, autofill runs, record saves with a before/after diff of corrected fields, previews, and real prints — success and failure) at `%LOCALAPPDATA%\IDL_APP\logs\audit.log`. See the module docstring for what it records and its (deliberate) plain-text-at-rest trade-off.
 - **`printing/`**
   - `layout_config.py` — relative-percentage field positions for the one IDP data page + cover page. **Placeholder page size (74x105mm)** until a blank booklet is measured.
-  - `print_page.py` — renders the finalized data onto a PDF sized to the page, for printing directly onto the pre-printed blank booklet.
+  - `print_page.py` — renders the finalized data onto a PDF sized to the page.
+  - `print_dispatch.py` — sends a rendered PDF straight to a named printer, silently, via SumatraPDF's CLI (see README's Printing setup section). **Not yet verified against a real printer.**
+  - `printer_config.py` — remembers which printer is configured on this machine; lists Windows' installed printers via PowerShell.
 - **`packaging/`**
   - `idl_app.spec` / `build_installer.bat` — PyInstaller packaging so the app can eventually be run as a real installed `.exe` rather than a terminal command. Must be built on Windows — see the spec file's own header comment.
-- **`tests/`** — 234 tests as of 2026-09-07: the OCR pipeline (the original, largest suite), plus `test_storage.py`, `test_audit_log.py`, and `test_records_screen_matching.py` covering the database and audit-log layers. `gui/`'s interactive dialogs are verified with manual headless Qt smoke tests rather than automated click-throughs — run with `python -m unittest discover -s tests`.
+- **`tests/`** — 234+ tests: the OCR pipeline (the original, largest suite), plus `test_storage.py`, `test_audit_log.py`, `test_records_screen_matching.py`, and `test_print_dispatch.py`/`test_printer_config.py` covering the database, audit-log, and print-dispatch layers (the last of these with the actual print call mocked — see `print_dispatch.py`'s docstring). `gui/`'s interactive dialogs are verified with manual headless Qt smoke tests rather than automated click-throughs — run with `python -m unittest discover -s tests`.
 
 ## Version control
 
@@ -153,10 +187,15 @@ doesn't depend on any one machine either.
 - **Real IDP page measurements.** `printing/layout_config.py` uses a
   placeholder page size; the calibration screen exists so this can be fixed
   without a code change once we have a blank booklet.
-- **Printer integration.** `print_page.py` produces a PDF at the right
-  physical size; actually sending it to a printer aligned with a booklet
-  page already loaded in the tray is a manual/OS-print-dialog step for now.
-  (Next up, per the current project plan.)
+- **Real-printer verification (2026-09-08).** `print_dispatch.py` now
+  sends directly to a configured printer via SumatraPDF (see the Printing
+  setup section above) instead of relying on a manual OS print dialog —
+  but this was built and unit-tested with the print call mocked, from a
+  machine with no printer attached. Needs a real first print, watched in
+  person, to confirm SumatraPDF's flags behave as documented against the
+  actual printer/driver, before it's trusted for a real booklet page. Also
+  still blocked on the page-size measurement above for the printed
+  *positions* to be correct even once dispatch itself is confirmed working.
 - **The Google Cloud Vision data-handling decision above** — flagged, not
   resolved. Needs an explicit answer from whoever owns that call before
   this handles real applicants' documents at volume.

@@ -174,9 +174,38 @@ def log_record_opened(record_id: int) -> None:
 
 
 def log_print(record_id: int | None, output_path: str) -> None:
+    """Logs a PREVIEW render (opened in a PDF viewer for a visual check --
+    see gui/new_idl_form.py's print_preview) -- nothing physically printed
+    yet. See log_print_dispatched for an actual send-to-printer event."""
     _logger.info(_kv({
         "event": "print_rendered",
         "user": _user(),
         "record_id": record_id if record_id is not None else "unsaved",
         "output_path": output_path,
+    }))
+
+
+def log_print_dispatched(record_id: int | None, printer_name: str, output_path: str) -> None:
+    """2026-09-08: logs an actual physical print sent to a real printer
+    (see printing/print_dispatch.py) -- distinct from log_print's preview
+    event above, since "a page was previewed on screen" and "a real
+    booklet page was consumed" are very different facts to be able to
+    look up later (e.g. reconciling how many physical blank booklet pages
+    should have been used against how many the audit log says were)."""
+    _logger.info(_kv({
+        "event": "print_dispatched",
+        "user": _user(),
+        "record_id": record_id if record_id is not None else "unsaved",
+        "printer": printer_name,
+        "output_path": output_path,
+    }))
+
+
+def log_print_dispatch_failed(record_id: int | None, printer_name: str, message: str) -> None:
+    _logger.info(_kv({
+        "event": "print_dispatch_failed",
+        "user": _user(),
+        "record_id": record_id if record_id is not None else "unsaved",
+        "printer": printer_name,
+        "message": message,
     }))

@@ -131,24 +131,52 @@ class RecordsScreen(QDialog):
         self.accept()
 
     def _reprint_selected(self):
+        """2026-09-08: sends straight to the configured printer (see
+        printing/print_dispatch.py and printer_config.py) instead of
+        opening a PDF viewer -- unlike the main form's fresh Autofill
+        result, a saved record's data has already been reviewed and saved
+        once, so "Reprint" reads as "print another physical copy," not
+        "let me look at this again." Staff who genuinely want to just look
+        at it first can still Open it into the main form and use Print
+        Preview there."""
         record = self._selected_record()
         if record is None:
             QMessageBox.information(self, "No selection", "Select a record first.")
             return
 
-        import os
-
-        from db.audit_log import log_print
+        from db.audit_log import log_print_dispatch_failed, log_print_dispatched
         from db.storage import APP_DATA_DIR
+        from printing.print_dispatch import print_pdf_to_printer
         from printing.print_page import render_idl_data_page
+        from printing.printer_config import get_configured_printer_name
+
+        printer_name = get_configured_printer_name()
+        if not printer_name:
+            QMessageBox.warning(
+                self, "No printer configured",
+                "Set a printer first from the main form's \"Printer Settings...\" button "
+                "before reprinting.",
+            )
+            return
+
+        confirm = QMessageBox.question(
+            self, "Reprint to physical booklet page",
+            f"This will print record #{record.id} onto a real blank IDP booklet page "
+            f"loaded in \"{printer_name}\". Continue?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
 
         APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
         output_path = str(APP_DATA_DIR / f"reprint_record_{record.id}.pdf")
         try:
             render_idl_data_page(record.fields, output_path)
-        except Exception as e:  # noqa: BLE001 - surface any failure rather than a silent no-op
-            QMessageBox.critical(self, "Reprint failed", f"Could not generate the print PDF: {e}")
+            print_pdf_to_printer(output_path, printer_name)
+        except Exception as e:  # noqa: BLE001 - surface any failure (PrintDispatchError or otherwise), never a silent no-op
+            log_print_dispatch_failed(record.id, printer_name, str(e))
+            QMessageBox.critical(self, "Reprint failed", f"Could not print to {printer_name!r}: {e}")
             return
 
-        log_print(record.id, output_path)
-        os.startfile(output_path)  # Windows-only -- matches this app's target platform
+        log_print_dispatched(record.id, printer_name, output_path)
+        QMessageBox.information(self, "Sent to printer", f"Sent to {printer_name}.")

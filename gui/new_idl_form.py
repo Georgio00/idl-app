@@ -41,9 +41,11 @@ from db.audit_log import (
 )
 from db.storage import APP_DATA_DIR, Storage
 from gui.image_upload_box import ImageUploadBox
+from gui.printer_settings_dialog import PrinterSettingsDialog
 from gui.records_screen import RecordsScreen
 from ocr.pipeline import run_autofill_pipeline
 from ocr.ocr_client import OcrError
+from printing.printer_config import get_configured_printer_name
 
 # Set IDL_APP_DEBUG_OCR=1 before launching to save every cropped OCR region
 # (and log its raw text) to %LOCALAPPDATA%\IDL_APP\debug\<timestamp>\ for
@@ -100,21 +102,35 @@ class NewIDLForm(QMainWindow):
         # a blank, insert-a-new-record state after a record has been
         # opened for editing — without it there'd be no way to start a
         # fresh IDL without restarting the whole app.
+        # 2026-09-08: added "Printer Settings..." and "Print" — "Print
+        # Preview" only ever opened the PDF in a viewer for a visual check
+        # (see print_preview below); there was no button that actually
+        # sent a page to a physical printer at all. "Print" sends directly,
+        # silently, to whichever printer is configured in Printer Settings
+        # (see printing/print_dispatch.py and printer_config.py) — kept
+        # deliberately separate from Print Preview so staff always get one
+        # more look before a real blank booklet page gets used.
         top_bar = QHBoxLayout()
         self.records_btn = QPushButton("Find / Reprint Record...")
         self.records_btn.clicked.connect(self.open_records_screen)
+        self.printer_settings_btn = QPushButton("Printer Settings...")
+        self.printer_settings_btn.clicked.connect(self.open_printer_settings)
         self.new_btn = QPushButton("New")
         self.new_btn.clicked.connect(self.reset_to_new_record)
         self.save_btn = QPushButton("Save")
         self.save_btn.clicked.connect(self.save_record)
-        self.print_btn = QPushButton("Print Preview")
-        self.print_btn.clicked.connect(self.print_preview)
+        self.print_preview_btn = QPushButton("Print Preview")
+        self.print_preview_btn.clicked.connect(self.print_preview)
+        self.print_btn = QPushButton("Print")
+        self.print_btn.clicked.connect(self.print_to_printer)
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.close)
         top_bar.addWidget(self.records_btn)
+        top_bar.addWidget(self.printer_settings_btn)
         top_bar.addStretch()
         top_bar.addWidget(self.new_btn)
         top_bar.addWidget(self.save_btn)
+        top_bar.addWidget(self.print_preview_btn)
         top_bar.addWidget(self.print_btn)
         top_bar.addWidget(self.cancel_btn)
         outer.addLayout(top_bar)
@@ -410,6 +426,51 @@ class NewIDLForm(QMainWindow):
 
         log_print(self.current_record_id, output_path)
         os.startfile(output_path)  # Windows-only -- matches this app's target platform
+
+    def open_printer_settings(self):
+        PrinterSettingsDialog(parent=self).exec()
+
+    def print_to_printer(self):
+        """Sends the current form's data straight to the printer configured
+        in Printer Settings — no viewer window, no OS print dialog. See
+        printing/print_dispatch.py's module docstring for the mechanism
+        (SumatraPDF's silent CLI) and why this is deliberately a separate
+        action from Print Preview above."""
+        from db.audit_log import log_print_dispatch_failed, log_print_dispatched
+        from printing.print_dispatch import print_pdf_to_printer
+        from printing.print_page import render_idl_data_page
+
+        printer_name = get_configured_printer_name()
+        if not printer_name:
+            QMessageBox.warning(
+                self, "No printer configured",
+                "Set a printer first via \"Printer Settings...\" before printing.",
+            )
+            return
+
+        confirm = QMessageBox.question(
+            self, "Print to physical booklet page",
+            f"This will print onto a real blank IDP booklet page loaded in "
+            f"\"{printer_name}\". Have you checked Print Preview and confirmed "
+            "the data is correct?\n\nContinue?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        plain_values = {key: edit.text() for key, edit in self.fields.items()}
+        APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = str(APP_DATA_DIR / "print_dispatch_last.pdf")
+        try:
+            render_idl_data_page(plain_values, output_path)
+            print_pdf_to_printer(output_path, printer_name)
+        except Exception as e:  # noqa: BLE001 - surface any failure (PrintDispatchError or otherwise), never a silent no-op
+            log_print_dispatch_failed(self.current_record_id, printer_name, str(e))
+            QMessageBox.critical(self, "Print failed", f"Could not print to {printer_name!r}: {e}")
+            return
+
+        log_print_dispatched(self.current_record_id, printer_name, output_path)
+        QMessageBox.information(self, "Sent to printer", f"Sent to {printer_name}.")
 
     def run_autofill(self):
         passport_path = self.passport_box.image_path

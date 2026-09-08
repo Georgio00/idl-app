@@ -35,14 +35,16 @@
 #   after installing: set GOOGLE_APPLICATION_CREDENTIALS to point at that
 #   machine's own credentials file. See README.md's "Google Cloud Vision
 #   setup" section.
-# - Tesseract / poppler binaries. poppler is still a real runtime
-#   dependency (PDF upload support, see gui/pdf_utils.py) and is a
-#   separate native program pdf2image shells out to -- PyInstaller can't
-#   bundle a program it doesn't know exists. Tesseract itself is no
-#   longer needed (see ocr/ocr_client.py's 2026-08-24 docstring entry --
-#   OCR moved to Google Cloud Vision) even though README.md's older
-#   sections still describe installing it; poppler still needs its own
-#   one-time install per README.md.
+# - Tesseract / poppler / SumatraPDF binaries. poppler (PDF upload
+#   support, see gui/pdf_utils.py) and SumatraPDF (direct-to-printer
+#   printing, see printing/print_dispatch.py, added 2026-09-08) are both
+#   real runtime dependencies that are separate native programs this app
+#   shells out to -- PyInstaller can't bundle a program it doesn't know
+#   exists. Both still need their own one-time install per README.md's
+#   Setup / Printing setup sections. Tesseract itself is no longer needed
+#   at all (see ocr/ocr_client.py's 2026-08-24 docstring entry -- OCR
+#   moved to Google Cloud Vision) even though README.md's older sections
+#   still describe installing it.
 
 import sys
 from pathlib import Path
