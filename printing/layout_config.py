@@ -1,12 +1,27 @@
 """
 Print layout for the one IDP booklet page (and cover page) that gets data
 printed on it. Positions are stored as FRACTIONS of the page (0.0-1.0), not
-absolute mm/px, per the brief — we don't have exact page dimensions yet, and
-percentages stay correct once we do, or if the placeholder size turns out
-wrong. PAGE_SIZE_MM is a placeholder (~74x105mm, roughly IDP booklet size)
-to use until a blank booklet is measured with a ruler — swap it out once
-that measurement exists; the fractions below don't depend on it being right,
-only the absolute font/paper scale of the rendered PDF does.
+absolute mm/px, per the brief — the fractions don't depend on the page size
+being exactly right, only the absolute font/paper scale of the rendered PDF
+does.
+
+2026-09-09: PAGE_SIZE_MM updated to (70.0, 105.0) — the real measured data
+page size (7cm x 10.5cm), given directly by Georgio, replacing the earlier
+74x105mm placeholder guess. 4mm narrower than the placeholder, which is
+meaningful at this page size: every field's absolute x-position (fraction
+* page width) shifts along with it. COVER_SIZE_MM was set to match on the
+assumption that a booklet's cover and data pages share the same trim size,
+which is standard for a bound booklet like this — flag it if the cover page
+actually measures differently, since that hasn't been independently
+confirmed the way the data page size just was.
+
+The field POSITIONS below (DEFAULT_DATA_PAGE_LAYOUT's fractions) are a
+SEPARATE open item from the page size: they're still calibrated from an
+unrelated filled example page photo (see the 2026-08-27 note below), not
+a blank booklet — getting the page size right doesn't by itself confirm
+those fractions land in the right place on a real blank page. That still
+needs its own verification once a blank booklet page is available to
+print onto and check.
 
 2026-08-27: DEFAULT_DATA_PAGE_LAYOUT below is calibrated directly against a
 real sample IDP data page photo Georgio provided (a filled example page —
@@ -43,9 +58,12 @@ from db.storage import APP_DATA_DIR
 
 LAYOUT_PATH = APP_DATA_DIR / "print_layout.json"
 
-# Placeholder page size in mm — replace once a blank booklet is measured.
-PAGE_SIZE_MM = (74.0, 105.0)
-COVER_SIZE_MM = (74.0, 105.0)
+# Real measured page size in mm (7cm x 10.5cm) — see the 2026-09-09 module
+# docstring note above. COVER_SIZE_MM mirrors it on the assumption the
+# cover page shares the same trim size as the data page; confirm
+# separately if that turns out wrong.
+PAGE_SIZE_MM = (70.0, 105.0)
+COVER_SIZE_MM = (70.0, 105.0)
 
 # Each entry: (x, y, w, h) as fractions of the page, top-left origin.
 # The category grid entries (A/B/C/D/E) are small boxes that get an "X" or

@@ -107,11 +107,15 @@ module docstring for why this particular tool):
 and tested with the actual print call mocked out, from a machine with no
 printer attached at all. The first real print needs to be watched in
 person to confirm SumatraPDF's silent-print flags behave as documented
-against your actual printer driver, and to confirm the page positions
-line up — which additionally still depends on `printing/layout_config.py`'s
-placeholder page size being replaced with a real measurement (see "What's
-still open" below); until that's done, treat "Print" as functionally
-wired up but not yet trustworthy for a real booklet page.
+against your actual printer driver.
+
+The page SIZE is now real (7cm x 10.5cm, measured 2026-09-09 — see
+`printing/layout_config.py`'s docstring), but the field POSITIONS on that
+page are still calibrated from an unrelated filled example page photo, not
+a blank booklet (see "What's still open" below) — so print output will be
+sized correctly but the individual fields may not land exactly where the
+pre-printed template expects until that's separately verified against a
+real blank page.
 
 ## Running
 
@@ -159,7 +163,7 @@ issues showed up and are both worth knowing about if you hit
   - `storage.py` — local SQLite store. Records are encrypted at rest with Fernet (see the module docstring for why Fernet over SQLCipher). DB file and encryption key live in `%LOCALAPPDATA%\IDL_APP\`, never in the repo.
   - `audit_log.py` — always-on, persistent audit trail (app starts, autofill runs, record saves with a before/after diff of corrected fields, previews, and real prints — success and failure) at `%LOCALAPPDATA%\IDL_APP\logs\audit.log`. See the module docstring for what it records and its (deliberate) plain-text-at-rest trade-off.
 - **`printing/`**
-  - `layout_config.py` — relative-percentage field positions for the one IDP data page + cover page. **Placeholder page size (74x105mm)** until a blank booklet is measured.
+  - `layout_config.py` — relative-percentage field positions for the one IDP data page + cover page. **Page size is real (70x105mm)**; field positions are still calibrated from an example photo, not a blank booklet.
   - `print_page.py` — renders the finalized data onto a PDF sized to the page.
   - `print_dispatch.py` — sends a rendered PDF straight to a named printer, silently, via SumatraPDF's CLI (see README's Printing setup section). **Not yet verified against a real printer.**
   - `printer_config.py` — remembers which printer is configured on this machine; lists Windows' installed printers via PowerShell.
@@ -184,9 +188,12 @@ doesn't depend on any one machine either.
   against real samples, but only a handful of them so far — worth testing
   against a larger, more varied batch (different printers/scanners/
   lighting) before trusting it across every applicant.
-- **Real IDP page measurements.** `printing/layout_config.py` uses a
-  placeholder page size; the calibration screen exists so this can be fixed
-  without a code change once we have a blank booklet.
+- **Real IDP field-position calibration.** The page SIZE is now real
+  (70x105mm, 2026-09-09), but `DEFAULT_DATA_PAGE_LAYOUT`'s field
+  positions are still calibrated from an unrelated filled example page
+  photo, not a blank booklet — `gui/calibration_screen.py` exists so this
+  can be fixed without a code change once a blank booklet page is
+  available to print a test page onto and check.
 - **Real-printer verification (2026-09-08).** `print_dispatch.py` now
   sends directly to a configured printer via SumatraPDF (see the Printing
   setup section above) instead of relying on a manual OS print dialog —
