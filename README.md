@@ -119,6 +119,13 @@ real blank page.
 
 ## Running
 
+**Day-to-day (staff, no terminal):** double-click the "IDL App" icon on the
+Desktop or Start Menu. See "Installing as a real app" right below for how
+that icon gets created — it's a one-time setup step per machine, then it's
+just a normal double-click app from then on.
+
+**For development** (editing code, running from source):
+
 ```bash
 py -3.12 gui/new_idl_form.py         # main "New IDL" form
 py -3.12 gui/calibration_screen.py   # print-layout calibration tool
@@ -126,6 +133,43 @@ py -3.12 gui/calibration_screen.py   # print-layout calibration tool
 
 Both need a display — they won't run headless. (For headless smoke-testing
 imports only, set `QT_QPA_PLATFORM=offscreen` first.)
+
+### Installing as a real app (desktop icon, no terminal)
+
+This turns the app into a normal installed Windows program with a
+double-click icon — the whole point being that after this one-time setup,
+nobody ever has to open a terminal or type a command to use it again.
+
+1. One-time, in the project's `.venv` (see Setup above):
+   ```
+   pip install pyinstaller
+   ```
+2. From the project root:
+   ```
+   packaging\build_installer.bat
+   ```
+   This builds `dist\IDL_App\IDL_App.exe` and then automatically creates a
+   "IDL App" shortcut on the Desktop and in the Start Menu that points at
+   it (via `packaging\create_shortcuts.ps1` — see that file if you ever
+   need to re-create the shortcuts without a full rebuild, e.g. after
+   moving the folder).
+3. From then on: double-click the "IDL App" desktop icon. No terminal, no
+   typed command, no `.venv` to activate.
+
+This one machine still needs the one-time dependencies listed in Setup
+(Poppler, `GOOGLE_APPLICATION_CREDENTIALS`, SumatraPDF) regardless of
+whether the app is launched from source or from the installed `.exe` —
+`build_installer.bat` prints a reminder of these at the end. One catch
+specific to the desktop icon: `GOOGLE_APPLICATION_CREDENTIALS` must be set
+with `setx` (or via System Properties), not the terminal-only `set` — and
+you need to log off and back on once after setting it, otherwise
+double-clicking the icon (via Explorer, which doesn't see a plain `set`)
+won't have the credential even though a terminal launched separately
+would.
+
+Rebuilding after a code change: re-run `packaging\build_installer.bat` —
+it overwrites the old `dist\IDL_App\` build and re-points the existing
+shortcuts at the new one, so the same desktop icon keeps working.
 
 **Note on the dev machine used to build this:** two separate PySide6 DLL
 issues showed up and are both worth knowing about if you hit
@@ -168,7 +212,8 @@ issues showed up and are both worth knowing about if you hit
   - `print_dispatch.py` — sends a rendered PDF straight to a named printer, silently, via SumatraPDF's CLI (see README's Printing setup section). **Not yet verified against a real printer.**
   - `printer_config.py` — remembers which printer is configured on this machine; lists Windows' installed printers via PowerShell.
 - **`packaging/`**
-  - `idl_app.spec` / `build_installer.bat` — PyInstaller packaging so the app can eventually be run as a real installed `.exe` rather than a terminal command. Must be built on Windows — see the spec file's own header comment.
+  - `idl_app.spec` / `build_installer.bat` — PyInstaller packaging so the app runs as a real installed `.exe` rather than a terminal command. Must be built on Windows — see the spec file's own header comment.
+  - `create_shortcuts.ps1` — creates the Desktop/Start Menu "IDL App" icon pointing at the built `.exe`; run automatically by `build_installer.bat`, or standalone if you just need to re-create the shortcuts (e.g. after moving the `dist\IDL_App\` folder).
 - **`tests/`** — 234+ tests: the OCR pipeline (the original, largest suite), plus `test_storage.py`, `test_audit_log.py`, `test_records_screen_matching.py`, and `test_print_dispatch.py`/`test_printer_config.py` covering the database, audit-log, and print-dispatch layers (the last of these with the actual print call mocked — see `print_dispatch.py`'s docstring). `gui/`'s interactive dialogs are verified with manual headless Qt smoke tests rather than automated click-throughs — run with `python -m unittest discover -s tests`.
 
 ## Version control
