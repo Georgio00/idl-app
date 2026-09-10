@@ -175,6 +175,50 @@ double-clicking the icon (via Explorer, which doesn't see a plain `set`)
 won't have the credential even though a terminal launched separately
 would.
 
+### Setting up a second device via USB (no rebuild needed there)
+
+When another PC needs to run the app for real — processing real documents
+and printing, not just viewing it — copy the already-built app over by USB
+instead of rebuilding from source on that machine. Python, `.venv`, git,
+and GitHub login are not needed on the new PC at all; the built app
+already has everything it needs.
+
+1. On a machine that already has `dist\IDL_App\` built (see "Installing
+   as a real app" above), copy the whole `dist\IDL_App` folder onto a USB
+   drive — the folder, not just the `.exe`, since it's missing its
+   bundled dependencies without the rest of the folder.
+2. Separately copy the Google Cloud Vision credentials JSON onto the USB,
+   as its own file, not inside the `IDL_App` folder. It's a live
+   credential — keep the drive secure while it's carrying it, and wipe it
+   afterward if you won't reuse it for another transfer.
+3. On the new PC: copy `IDL_App` from the USB to that PC (Desktop is
+   fine). Right-click `IDL_App.exe` → **Send to → Desktop (create
+   shortcut)** for a double-click icon — a normal Windows action, no
+   script needed.
+4. Copy the credentials file to a permanent spot on the new PC (e.g.
+   `%LOCALAPPDATA%\IDL_APP\credentials\vision-key.json`), set
+   `GOOGLE_APPLICATION_CREDENTIALS` to that path via System Properties →
+   Environment Variables, then log off and back on once.
+5. Install Poppler and SumatraPDF on the new PC — same one-time installers
+   as the Setup / Printing setup sections above. Normal downloaded
+   installers, unrelated to this app's own code.
+6. Open the app once on the new PC and use "Printer Settings..." to pick
+   that PC's printer.
+
+**Important — each machine keeps its own separate records.** The
+encrypted database, audit log, printer choice, and any saved print-layout
+override all live under `%LOCALAPPDATA%\IDL_APP\` **on that one PC** —
+copying the app via USB does not copy or share any of this. A record
+saved on one device will not show up on the other; if staff need to look
+up or reprint something saved on a different device than the one they're
+using, they'd need to go to the device it was actually saved on. If both
+devices should eventually share one list of records instead of each
+keeping its own, that needs networked/shared storage in place of today's
+per-machine SQLite file — a real design change, not something this USB
+setup covers, worth flagging to whoever owns this decision at the company
+before staff come to rely on cross-device lookups that don't actually
+exist yet.
+
 **Note on the dev machine used to build this:** two separate PySide6 DLL
 issues showed up and are both worth knowing about if you hit
 `ImportError: DLL load failed while importing QtWidgets` (or `QtCore`):
