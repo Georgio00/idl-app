@@ -181,29 +181,96 @@ When another PC needs to run the app for real — processing real documents
 and printing, not just viewing it — copy the already-built app over by USB
 instead of rebuilding from source on that machine. Python, `.venv`, git,
 and GitHub login are not needed on the new PC at all; the built app
-already has everything it needs.
+already has everything it needs. This walkthrough is written from an
+actual first real transfer (2026-09-10, Georgio's second PC) — every
+numbered step below is something that was actually done, and the two
+"if this happens" notes are real problems that actually came up, not
+hypothetical ones.
 
 1. On a machine that already has `dist\IDL_App\` built (see "Installing
    as a real app" above), copy the whole `dist\IDL_App` folder onto a USB
    drive — the folder, not just the `.exe`, since it's missing its
    bundled dependencies without the rest of the folder.
+
+   **If `IDL_App.exe` doesn't show up on the USB after copying** (the
+   `_internal` folder made it over but the `.exe` itself didn't, and
+   re-checking the source folder shows it's still fine there): this has
+   happened, and the likely cause is antivirus/Windows Defender silently
+   blocking an unsigned freshly-built `.exe` from copying to removable
+   media, while everything else around it copies through fine. Fix:
+   right-click the `IDL_App` folder → **Compress to ZIP file** (built
+   into Windows), copy the `.zip` to the USB instead of the loose folder,
+   and unzip it back out once it's on the new PC. Zipping first usually
+   avoids the block. Either way, always double-check the USB actually has
+   `IDL_App.exe` (or just `IDL_App` with a generic app icon, if this PC
+   hides file extensions) sitting next to `_internal` before moving to
+   the new PC — don't assume the copy fully succeeded.
+
 2. Separately copy the Google Cloud Vision credentials JSON onto the USB,
    as its own file, not inside the `IDL_App` folder. It's a live
    credential — keep the drive secure while it's carrying it, and wipe it
    afterward if you won't reuse it for another transfer.
+
 3. On the new PC: copy `IDL_App` from the USB to that PC (Desktop is
-   fine). Right-click `IDL_App.exe` → **Send to → Desktop (create
-   shortcut)** for a double-click icon — a normal Windows action, no
-   script needed.
-4. Copy the credentials file to a permanent spot on the new PC (e.g.
-   `%LOCALAPPDATA%\IDL_APP\credentials\vision-key.json`), set
-   `GOOGLE_APPLICATION_CREDENTIALS` to that path via System Properties →
-   Environment Variables, then log off and back on once.
-5. Install Poppler and SumatraPDF on the new PC — same one-time installers
+   fine). Confirm both `_internal` and `IDL_App.exe` are actually there —
+   same check as step 1.
+
+4. Right-click `IDL_App.exe` → **Properties**, and if there's an
+   "Unblock" checkbox near the bottom, tick it and OK. Windows sometimes
+   flags a file that arrived via USB as untrusted; this avoids a
+   SmartScreen warning on first launch.
+
+5. Right-click `IDL_App.exe` → **Send to → Desktop (create shortcut)**
+   for a double-click icon — no script needed. On Windows 11's newer,
+   shorter right-click menu, "Send to" isn't shown directly: click
+   **"Show more options"** at the bottom of that menu first, which opens
+   the classic menu where "Send to" is.
+
+6. Create the credentials folder and copy the file in. `%LOCALAPPDATA%`
+   won't exist as `IDL_APP\credentials` yet on a PC that's never run this
+   app before, so build it up one folder at a time rather than pasting
+   the whole path at once (typing the full nested path directly into the
+   address bar will just say it can't be found):
+   - Type `%LOCALAPPDATA%` into File Explorer's address bar and press
+     Enter (this one already exists).
+   - Right-click empty space → **New → Folder** → name it `IDL_APP`.
+   - Open it, right-click → **New → Folder** → name it `credentials`.
+   - Copy the credentials JSON from the USB into that new `credentials`
+     folder.
+
+7. Set the environment variable: press the Windows key, type
+   `environment variables`, open **"Edit environment variables for your
+   account"**, click **Environment Variables...**, then **New...** under
+   "User variables". Name: `GOOGLE_APPLICATION_CREDENTIALS`. Value: the
+   full path to the JSON file from step 6 (e.g.
+   `%LOCALAPPDATA%\IDL_APP\credentials\<filename>.json` — Windows expands
+   this fine as the value here). **Log off and log back on once** — this
+   is the step that's easy to skip, but the desktop icon won't see the
+   new variable without it (a terminal window would, which is why this
+   is easy to miss if you only ever test from a terminal).
+
+8. Install Poppler and SumatraPDF on the new PC — same one-time installers
    as the Setup / Printing setup sections above. Normal downloaded
    installers, unrelated to this app's own code.
-6. Open the app once on the new PC and use "Printer Settings..." to pick
-   that PC's printer.
+
+9. Double-click the new desktop icon. If it opens cleanly, move to step
+   10. **If it shows "Unhandled exception in script ... ImportError: DLL
+   load failed while importing _sqlite3"**: this happened on the very
+   first transfer, from a `dist\IDL_App` that was built before
+   `packaging\idl_app.spec` was fixed (2026-09-10) to bundle
+   `sqlite3.dll` automatically — see that file's module comment and
+   `packaging\find_sqlite3_dll.py` for the full story. Any build made
+   *after* that fix won't hit this. If you're ever moving a build that
+   predates it, the workaround is copying `sqlite3.dll` (found under
+   the build machine's base Python install — check
+   `packaging\find_sqlite3_dll.py`'s candidate paths, e.g.
+   `anaconda3\Library\bin\sqlite3.dll` for an Anaconda-based `.venv`)
+   into that build's `_internal` folder by hand.
+
+10. Open the app once on the new PC and use "Printer Settings..." to pick
+    that PC's printer, then run Autofill on a real document and try an
+    actual Print to confirm both the credentials and printer setup work
+    end to end, not just that the app opens.
 
 **Important — each machine keeps its own separate records.** The
 encrypted database, audit log, printer choice, and any saved print-layout
