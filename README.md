@@ -134,42 +134,46 @@ py -3.12 gui/calibration_screen.py   # print-layout calibration tool
 Both need a display — they won't run headless. (For headless smoke-testing
 imports only, set `QT_QPA_PLATFORM=offscreen` first.)
 
-### Installing as a real app (desktop icon, no terminal)
+### Installing as a real app (desktop icon, zero terminal typing)
 
 This turns the app into a normal installed Windows program with a
 double-click icon — the whole point being that after this one-time setup,
-nobody ever has to open a terminal or type a command to use it again.
+nobody ever has to open a terminal, activate a `.venv`, or type a command
+to use it again.
 
-1. One-time, in the project's `.venv` (see Setup above):
-   ```
-   pip install pyinstaller
-   ```
-2. From the project root:
-   ```
-   packaging\build_installer.bat
-   ```
-   This builds `dist\IDL_App\IDL_App.exe` and then automatically creates a
-   "IDL App" shortcut on the Desktop and in the Start Menu that points at
-   it (via `packaging\create_shortcuts.ps1` — see that file if you ever
-   need to re-create the shortcuts without a full rebuild, e.g. after
-   moving the folder).
-3. From then on: double-click the "IDL App" desktop icon. No terminal, no
-   typed command, no `.venv` to activate.
+1. In the project's root folder, find **`Update_and_Install.bat`** and
+   double-click it. That's the only step — you never type anything into
+   the black window that opens; it drives itself and tells you when it's
+   done. It:
+   - syncs the latest code (from the update bundle Claude drops in the
+     project folder, or `git pull` if there's no bundle to sync from),
+   - creates the project's `.venv` the first time only (a few minutes;
+     instant every time after, since it's already there),
+   - builds `dist\IDL_App\IDL_App.exe`, and
+   - creates/refreshes the "IDL App" shortcut on the Desktop and Start
+     Menu (via `packaging\create_shortcuts.ps1`).
+2. From then on: double-click the "IDL App" desktop icon to open the app
+   itself. No terminal, no typed command, no `.venv` to activate.
 
-This one machine still needs the one-time dependencies listed in Setup
+This is also how you pick up a new version later: whenever Claude pushes
+an update into this folder, double-click `Update_and_Install.bat` again —
+same one step, no re-typing anything — and it rebuilds and re-points the
+same desktop icon at the new version.
+
+(`packaging\build_installer.bat` still exists underneath and can be run
+directly from a terminal if you prefer — see that file — but
+`Update_and_Install.bat` is the normal path and needs nothing typed.)
+
+This machine still needs the one-time dependencies listed in Setup
 (Poppler, `GOOGLE_APPLICATION_CREDENTIALS`, SumatraPDF) regardless of
 whether the app is launched from source or from the installed `.exe` —
-`build_installer.bat` prints a reminder of these at the end. One catch
+the install script prints a reminder of these at the end. One catch
 specific to the desktop icon: `GOOGLE_APPLICATION_CREDENTIALS` must be set
 with `setx` (or via System Properties), not the terminal-only `set` — and
 you need to log off and back on once after setting it, otherwise
 double-clicking the icon (via Explorer, which doesn't see a plain `set`)
 won't have the credential even though a terminal launched separately
 would.
-
-Rebuilding after a code change: re-run `packaging\build_installer.bat` —
-it overwrites the old `dist\IDL_App\` build and re-points the existing
-shortcuts at the new one, so the same desktop icon keeps working.
 
 **Note on the dev machine used to build this:** two separate PySide6 DLL
 issues showed up and are both worth knowing about if you hit
@@ -186,6 +190,7 @@ issues showed up and are both worth knowing about if you hit
 
 ## Project layout
 
+- **`Update_and_Install.bat`** (project root) — the normal way to install or update the app: double-click it, no terminal typing. See "Installing as a real app" above.
 - **`ocr/`** — OCR pipeline.
   - `ocr_client.py` — the only file that talks to Google Cloud Vision.
   - `mrz_parser.py` — parses + checksum-validates passport MRZ lines (no OCR itself).

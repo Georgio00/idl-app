@@ -4,24 +4,41 @@ REM creates a Desktop / Start Menu shortcut for it, so the end result of
 REM running this one script is a double-click icon -- not a terminal
 REM command you have to re-type every time.
 REM
-REM Run this FROM THE PROJECT ROOT, on Windows, inside the project's
-REM .venv (see README.md's Setup section) -- see idl_app.spec's own
-REM header comment for why this can't be done from a Linux machine.
+REM Normally you don't run this file directly -- double-click
+REM Update_and_Install.bat at the project root instead, which also syncs
+REM the code and creates the .venv first if needed, then calls this file.
+REM This file can still be run on its own (e.g. `packaging\build_installer.bat`
+REM from a terminal) as long as .venv already exists at the project root
+REM (see README.md's Setup section) -- see idl_app.spec's own header
+REM comment for why the build itself can't be done from a Linux machine.
 REM
 REM Usage:
 REM     packaging\build_installer.bat
 
 setlocal
+cd /d "%~dp0.."
 
-where pyinstaller >nul 2>nul
-if errorlevel 1 (
-    echo PyInstaller is not installed in this environment.
-    echo Run: pip install pyinstaller
+if not exist ".venv\Scripts\python.exe" (
+    echo No .venv found at the project root ^(%cd%^).
+    echo Double-click Update_and_Install.bat instead -- it creates .venv
+    echo automatically. Or manually: py -3.12 -m venv .venv, then
+    echo .venv\Scripts\python.exe -m pip install -r requirements.txt
     exit /b 1
 )
 
+".venv\Scripts\python.exe" -m pip show pyinstaller >nul 2>nul
+if errorlevel 1 (
+    echo Installing PyInstaller into .venv ...
+    ".venv\Scripts\python.exe" -m pip install pyinstaller
+    if errorlevel 1 (
+        echo Could not install PyInstaller -- check your internet connection
+        echo and try again.
+        exit /b 1
+    )
+)
+
 echo Building IDL_App ...
-pyinstaller packaging\idl_app.spec --distpath dist --workpath build --noconfirm
+".venv\Scripts\python.exe" -m PyInstaller packaging\idl_app.spec --distpath dist --workpath build --noconfirm
 if errorlevel 1 (
     echo Build failed -- see the PyInstaller output above.
     exit /b 1
