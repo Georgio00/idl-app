@@ -262,6 +262,7 @@ issues showed up and are both worth knowing about if you hit
   - `printer_config.py` — remembers which printer is configured on this machine; lists Windows' installed printers via PowerShell.
 - **`packaging/`**
   - `idl_app.spec` / `build_installer.bat` — PyInstaller packaging so the app runs as a real installed `.exe` rather than a terminal command. Must be built on Windows — see the spec file's own header comment.
+  - `find_sqlite3_dll.py` — locates the SQLite engine DLL the built app needs at runtime, so it gets bundled automatically regardless of whether the build machine's Python is a plain python.org install or an Anaconda one (these two lay it out differently — see the module docstring for the real deployment failure this fixes, 2026-09-10).
   - `create_shortcuts.ps1` — creates the Desktop/Start Menu "IDL App" icon pointing at the built `.exe`; run automatically by `build_installer.bat`, or standalone if you just need to re-create the shortcuts (e.g. after moving the `dist\IDL_App\` folder).
 - **`tests/`** — 234+ tests: the OCR pipeline (the original, largest suite), plus `test_storage.py`, `test_audit_log.py`, `test_records_screen_matching.py`, and `test_print_dispatch.py`/`test_printer_config.py` covering the database, audit-log, and print-dispatch layers (the last of these with the actual print call mocked — see `print_dispatch.py`'s docstring). `gui/`'s interactive dialogs are verified with manual headless Qt smoke tests rather than automated click-throughs — run with `python -m unittest discover -s tests`.
 

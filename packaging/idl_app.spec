@@ -45,6 +45,25 @@
 #   at all (see ocr/ocr_client.py's 2026-08-24 docstring entry -- OCR
 #   moved to Google Cloud Vision) even though README.md's older sections
 #   still describe installing it.
+#
+# 2026-09-10: db/storage.py's sqlite3 usage crashed on a machine that
+# wasn't the one that built the .exe -- "ImportError: DLL load failed
+# while importing _sqlite3: The specified module could not be found."
+# Root cause: _sqlite3.pyd (the Python C-extension wrapper) dynamically
+# loads a separate sqlite3.dll (the actual SQLite engine), and on this
+# project's build machine that DLL lives under the base Anaconda install
+# (.venv\pyvenv.cfg's "home" -- Georgio's .venv was created from
+# anaconda3\python.exe) at anaconda3\Library\bin\sqlite3.dll, NOT
+# alongside python.exe the way a plain python.org install would lay it
+# out. PyInstaller's automatic dependency scan didn't find it there, so
+# it silently built a .exe that only worked on the machine that already
+# happened to have that exact DLL on its PATH -- worked on the build
+# machine, broke on every other machine. Fixed below via
+# find_sqlite3_dll.py, which locates it relative to sys.base_prefix (the
+# venv's base interpreter, whatever that turns out to be on whoever's
+# machine builds this) instead of hardcoding Georgio's anaconda3 path,
+# and fails the BUILD loudly if it's not found, rather than producing
+# another silently-broken .exe. See tests/test_find_sqlite3_dll.py.
 
 import sys
 from pathlib import Path
@@ -53,10 +72,17 @@ block_cipher = None
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
 
+sys.path.insert(0, str(PROJECT_ROOT / "packaging"))
+from find_sqlite3_dll import find_sqlite3_dll  # noqa: E402
+
+_SQLITE3_DLL = find_sqlite3_dll(sys.base_prefix)
+
 a = Analysis(
     [str(PROJECT_ROOT / "gui" / "new_idl_form.py")],
     pathex=[str(PROJECT_ROOT)],
-    binaries=[],
+    binaries=[
+        (str(_SQLITE3_DLL), "."),
+    ],
     datas=[
         # License field-region reference photos (ocr/license_ocr.py's
         # _load_reference_cards reads these by path relative to the
