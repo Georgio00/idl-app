@@ -32,7 +32,24 @@ logger = logging.getLogger("idl_app.updater")
 # yet behaves exactly as if this feature doesn't exist, rather than
 # erroring on every launch. Set this once real link is created -- see
 # README.md's "Publishing an update" section.
-UPDATE_MANIFEST_URL = ""
+#
+# 2026-09-11: set to the real, permanent share link for
+# OneDrive/"IDL App Updates"/version.json ("Anyone with the link" /
+# "Can view"), created live via screen control on Georgio's PC. The
+# version.json file itself is still EMPTY at this point (0 KB) -- it
+# will be filled in with real {"version", "download_share_url",
+# "sha256", "notes"} JSON the first time Georgio actually publishes an
+# update (see README.md's "Publishing an update" section). Until then,
+# check_for_update() fetches empty text, parse_update_manifest() raises
+# ManifestError (invalid JSON), and check_for_update() catches that and
+# returns None per its module docstring -- so shipping this URL now,
+# before there's anything to update to, is safe: the app just silently
+# finds no update, exactly as if the feature weren't configured yet.
+# Still NOT verified end-to-end against a real download (see
+# updater/__init__.py) -- this sandbox has no network path to
+# api.onedrive.com to test the fetch itself (outbound proxy blocks that
+# host entirely), only a real Windows run can confirm it.
+UPDATE_MANIFEST_URL = "https://1drv.ms/u/c/d4f489e11d6fefb6/IQBKXifcfde-SL7ENakcThOKAblQmMhfFhgQNcOZchaS8sM?e=4PJime"
 
 
 class UpdateManifest(NamedTuple):
