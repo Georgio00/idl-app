@@ -209,3 +209,50 @@ def log_print_dispatch_failed(record_id: int | None, printer_name: str, message:
         "printer": printer_name,
         "message": message,
     }))
+
+
+def log_update_available(current_version: str, new_version: str) -> None:
+    """2026-09-11: the auto-updater (see updater/) found a newer version
+    on startup and is about to show staff the "Update available?" prompt
+    -- recorded regardless of what they choose next, so there's a record
+    of when a machine was offered an update even if it declines every
+    time (see log_update_declined)."""
+    _logger.info(_kv({
+        "event": "update_available",
+        "user": _user(),
+        "current_version": current_version,
+        "new_version": new_version,
+    }))
+
+
+def log_update_declined(current_version: str, new_version: str) -> None:
+    _logger.info(_kv({
+        "event": "update_declined",
+        "user": _user(),
+        "current_version": current_version,
+        "new_version": new_version,
+    }))
+
+
+def log_update_applied(from_version: str, to_version: str) -> None:
+    """Logged right before the app quits to let the swap script finish
+    the job (see updater/apply_update.py) -- this only confirms the
+    update was ACCEPTED and handed off, not that the swap+relaunch
+    afterward actually succeeded, since the app is no longer running by
+    that point to log anything further itself."""
+    _logger.info(_kv({
+        "event": "update_applied",
+        "user": _user(),
+        "from_version": from_version,
+        "to_version": to_version,
+    }))
+
+
+def log_update_failed(current_version: str, new_version: str, message: str) -> None:
+    _logger.info(_kv({
+        "event": "update_failed",
+        "user": _user(),
+        "current_version": current_version,
+        "new_version": new_version,
+        "message": message,
+    }))

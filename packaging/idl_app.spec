@@ -25,6 +25,15 @@
 # which is slower and makes crash diagnostics harder to reason about for
 # an internal tool that isn't trying to hide how it's built).
 #
+# 2026-09-11: the app now imports `requests` directly (updater/onedrive.py,
+# for the auto-update check -- see README.md's "Publishing an update"
+# section). Not added to hiddenimports below: `requests` is a plain
+# static top-level import PyInstaller's own analysis follows on its own,
+# unlike the grpc/PySide6 cases below which are dynamically loaded and
+# genuinely need to be told about explicitly. Called out here only so
+# it's not a surprise if a future build ever needs a requests-specific
+# hook -- there wasn't one needed as of this build.
+#
 # What this does NOT solve, on purpose:
 #
 # - Google Cloud Vision credentials. The service-account JSON that

@@ -26,6 +26,12 @@ google-cloud-vision>=3.7
 # README.md.
 pdf2image>=1.17
 
+# Auto-update checks against a OneDrive-hosted manifest (see updater/ and
+# README.md's "Publishing an update" section, added 2026-09-11). Plain
+# HTTP GETs against the Microsoft Graph "shares" API -- no Microsoft
+# account or SDK needed, just this.
+requests>=2.31
+
 # NOT required to run the app as of 2026-08-24's OCR engine switch — kept
 # here, commented out, only because ocr/easyocr_client.py and
 # ocr/passport_ocr.py's docstrings document it as a possible fallback path

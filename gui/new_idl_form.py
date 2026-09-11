@@ -26,6 +26,7 @@ import logging
 import os
 import sys
 from datetime import date
+from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
@@ -37,7 +38,8 @@ from PySide6.QtWidgets import (
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db.audit_log import (
     configure_audit_logging, log_app_start, log_autofill_failed, log_autofill_run,
-    log_record_opened, log_record_saved,
+    log_record_opened, log_record_saved, log_update_applied, log_update_available,
+    log_update_declined, log_update_failed,
 )
 from db.storage import APP_DATA_DIR, Storage
 from gui.image_upload_box import ImageUploadBox
@@ -46,6 +48,9 @@ from gui.records_screen import RecordsScreen
 from ocr.pipeline import run_autofill_pipeline
 from ocr.ocr_client import OcrError
 from printing.printer_config import get_configured_printer_name
+from updater.apply_update import UpdateApplyError, apply_update_and_restart
+from updater.update_checker import UpdateManifest, check_for_update
+from updater.version import CURRENT_VERSION
 
 # Set IDL_APP_DEBUG_OCR=1 before launching to save every cropped OCR region
 # (and log its raw text) to %LOCALAPPDATA%\IDL_APP\debug\<timestamp>\ for
@@ -83,6 +88,25 @@ class AutofillWorker(QThread):
             self.failed.emit(str(e))
         except Exception as e:  # noqa: BLE001 - surface any unexpected failure to the user, not a crash
             self.failed.emit(f"Unexpected error during autofill: {e}")
+
+
+class UpdateCheckWorker(QThread):
+    """2026-09-11: runs the auto-update check (updater.update_checker) off
+    the UI thread, since it makes a real network call and must never
+    delay the window actually appearing on screen -- a staff member
+    opening the app to process a document shouldn't wait on an update
+    check that may be slow (or hanging) before they can start typing.
+    Only emits update_found when there actually IS a newer version;
+    silence (no signal at all) covers "no update," "check failed," and
+    "already up to date" identically, since none of those need to
+    interrupt anyone -- see check_for_update's own docstring for why it
+    never raises."""
+    update_found = Signal(object)  # UpdateManifest
+
+    def run(self):
+        manifest = check_for_update(CURRENT_VERSION)
+        if manifest is not None:
+            self.update_found.emit(manifest)
 
 
 class NewIDLForm(QMainWindow):
@@ -309,6 +333,54 @@ class NewIDLForm(QMainWindow):
         # immediately when a record is opened from the Records screen.
         self.current_record_id: int | None = None
         self._save_baseline: dict[str, str] | None = None
+
+        self._update_worker = None
+        self._maybe_check_for_update()
+
+    def _maybe_check_for_update(self):
+        """2026-09-11: kicks off the background auto-update check (see
+        UpdateCheckWorker above and updater/update_checker.py) — only
+        when running as a built .exe (sys.frozen), never when running
+        from source. Applying an update means swapping the INSTALLED
+        app's folder for a new one; a developer running gui/new_idl_form.py
+        straight from a git checkout has no such folder to swap, and
+        nagging them to "update" their own in-progress edits would just
+        be confusing."""
+        if not getattr(sys, "frozen", False):
+            return
+        self._update_worker = UpdateCheckWorker()
+        self._update_worker.update_found.connect(self._on_update_available)
+        self._update_worker.start()
+
+    def _on_update_available(self, manifest: UpdateManifest):
+        log_update_available(CURRENT_VERSION, manifest.version)
+        notes = f"\n\n{manifest.notes}" if manifest.notes else ""
+        reply = QMessageBox.question(
+            self, "Update available",
+            f"Version {manifest.version} is available (you're running {CURRENT_VERSION})."
+            f"{notes}\n\nInstall it now? The app will close and reopen automatically "
+            "once it's done — save any work first.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            log_update_declined(CURRENT_VERSION, manifest.version)
+            return
+
+        install_dir = Path(sys.executable).parent
+        exe_name = Path(sys.executable).name
+        try:
+            apply_update_and_restart(manifest, install_dir, exe_name)
+        except UpdateApplyError as e:
+            log_update_failed(CURRENT_VERSION, manifest.version, str(e))
+            QMessageBox.critical(
+                self, "Update failed",
+                f"Could not install the update: {e}\n\n"
+                "The app has not been changed and will keep running normally.",
+            )
+            return
+
+        log_update_applied(CURRENT_VERSION, manifest.version)
+        QApplication.instance().quit()
 
     def _update_autofill_enabled(self):
         all_filled = all(

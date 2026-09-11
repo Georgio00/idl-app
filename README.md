@@ -286,6 +286,84 @@ setup covers, worth flagging to whoever owns this decision at the company
 before staff come to rely on cross-device lookups that don't actually
 exist yet.
 
+### Publishing an update (auto-update over the internet)
+
+Added 2026-09-11 so a company machine can pick up a new version without
+Georgio physically visiting it or redoing the USB transfer by hand. Once
+this is set up, staff see an "Update available — install now?" prompt
+when they open the app (see `updater/` and `gui/new_idl_form.py`'s
+`_on_update_available`) — one click, no technical knowledge needed, and
+declining just means it asks again next time a newer version exists.
+
+**How it works, in short:** the app checks a small `version.json` file
+hosted as a OneDrive "anyone with the link" share for a version number
+newer than its own (`updater/version.py`'s `CURRENT_VERSION`). If found,
+and staff confirm, it downloads the new build (also a OneDrive share,
+whose link and sha256 checksum are both inside `version.json`), verifies
+the checksum, and hands off to a small generated script that waits for
+the app to close, swaps the old files for the new ones, and reopens it.
+No Microsoft account, API key, or other credential is embedded in the
+built app — the OneDrive "shares" API this uses is anonymous and public
+by design for a link shared as "anyone with the link," the same way
+right-clicking a file in OneDrive and choosing "Copy link" works for
+anyone you send that link to, signed in or not.
+
+**One-time setup (do this once, before the first update):**
+
+1. In OneDrive, create a folder for this (e.g. "IDL App Updates").
+   Sharing it more broadly than necessary isn't needed — only the
+   version.json file's own link is baked into the app; the folder itself
+   doesn't need to be public.
+2. Create an empty `version.json` in that folder, right-click it →
+   **Share** → make sure it's set to "Anyone with the link" → Copy link.
+   Paste that link into `updater/update_checker.py`'s
+   `UPDATE_MANIFEST_URL` constant, then publish that code change like
+   any other (it needs to ship in a build once, after which it never
+   needs to change again — only `version.json`'s *contents* change from
+   here on, not this link).
+
+**Every time you publish a new version, after that one-time setup:**
+
+1. Bump `updater/version.py`'s `CURRENT_VERSION` (e.g. `"1.0.0"` →
+   `"1.1.0"`) as part of the code change you're publishing.
+2. Build it: `Update_and_Install.bat` on this laptop, as usual.
+3. Zip it: right-click `dist\IDL_App` → **Compress to ZIP file**.
+4. Compute its checksum — no extra tool needed, Windows has one built in:
+   ```
+   certutil -hashfile dist\IDL_App.zip SHA256
+   ```
+   Copy the long hex string it prints (ignore the "CertUtil: -hashfile
+   command completed successfully" line above/below it).
+5. Upload that `.zip` into the same OneDrive folder, right-click it →
+   **Share** → "Anyone with the link" → Copy link.
+6. Edit `version.json` (the one from the one-time setup step) to:
+   ```json
+   {
+     "version": "1.1.0",
+     "download_share_url": "<the zip's share link from step 5>",
+     "sha256": "<the checksum from step 4>",
+     "notes": "Optional: a short line shown to staff in the update prompt"
+   }
+   ```
+   Save it back to the SAME file in OneDrive (overwrite it in place —
+   don't delete and re-create it, since that would change its link and
+   break the one already baked into the app).
+7. That's it. The next time the app is opened on any machine running an
+   older version, it'll offer the update.
+
+**Not yet verified end-to-end** — this was built and tested from a
+Linux sandbox that can't reach a real OneDrive account or run the built
+`.exe` (see `updater/`'s module docstring and each file under it for
+exactly what IS covered by `tests/`: version comparison, the OneDrive
+URL encoding, download/hash/zip-extraction logic, and the exact
+generated swap script — all real, all tested, just never against an
+actual OneDrive share or by actually watching a real `.exe` replace
+itself on a real Windows machine). Before relying on this for the
+company machine: publish a tiny test update (bump the version by a
+trivial amount) and run one full update cycle on THIS laptop first,
+watching it happen, rather than the company machine being the first
+real test.
+
 **Note on the dev machine used to build this:** two separate PySide6 DLL
 issues showed up and are both worth knowing about if you hit
 `ImportError: DLL load failed while importing QtWidgets` (or `QtCore`):
@@ -331,7 +409,12 @@ issues showed up and are both worth knowing about if you hit
   - `idl_app.spec` / `build_installer.bat` — PyInstaller packaging so the app runs as a real installed `.exe` rather than a terminal command. Must be built on Windows — see the spec file's own header comment.
   - `find_sqlite3_dll.py` — locates the SQLite engine DLL the built app needs at runtime, so it gets bundled automatically regardless of whether the build machine's Python is a plain python.org install or an Anaconda one (these two lay it out differently — see the module docstring for the real deployment failure this fixes, 2026-09-10).
   - `create_shortcuts.ps1` — creates the Desktop/Start Menu "IDL App" icon pointing at the built `.exe`; run automatically by `build_installer.bat`, or standalone if you just need to re-create the shortcuts (e.g. after moving the `dist\IDL_App\` folder).
-- **`tests/`** — 234+ tests: the OCR pipeline (the original, largest suite), plus `test_storage.py`, `test_audit_log.py`, `test_records_screen_matching.py`, and `test_print_dispatch.py`/`test_printer_config.py` covering the database, audit-log, and print-dispatch layers (the last of these with the actual print call mocked — see `print_dispatch.py`'s docstring). `gui/`'s interactive dialogs are verified with manual headless Qt smoke tests rather than automated click-throughs — run with `python -m unittest discover -s tests`.
+- **`updater/`** — auto-update over the internet (2026-09-11), so a company machine can pick up a new version without a physical USB visit. See "Publishing an update" above for the full workflow.
+  - `version.py` — `CURRENT_VERSION` (bumped by hand each release) and version-string comparison.
+  - `onedrive.py` — fetches files from a OneDrive "anyone with the link" share, with no embedded Microsoft credential.
+  - `update_checker.py` — checks the OneDrive-hosted `version.json` manifest for a version newer than the one running; never raises or blocks app startup, even if the check fails outright.
+  - `apply_update.py` — downloads, sha256-verifies, and stages a new version, then hands off to a generated batch script that swaps it in and relaunches the app once the current process has exited (a running `.exe` can't safely overwrite its own loaded DLLs). **Not yet verified end-to-end on a real Windows machine or against a real OneDrive share** — see the module's own docstring for exactly what its tests do and don't cover.
+- **`tests/`** — 300+ tests: the OCR pipeline (the original, largest suite), plus `test_storage.py`, `test_audit_log.py`, `test_records_screen_matching.py`, `test_print_dispatch.py`/`test_printer_config.py`, `test_find_sqlite3_dll.py`, and `test_version.py`/`test_onedrive.py`/`test_update_checker.py`/`test_apply_update.py` covering the auto-updater (the last of these with the OneDrive network calls and the final process launch mocked, but real zip files/hashing/temp directories throughout — see `updater/apply_update.py`'s docstring for exactly what that does and doesn't verify). `gui/`'s interactive dialogs are verified with manual headless Qt smoke tests rather than automated click-throughs — run with `python -m unittest discover -s tests`.
 
 ## Version control
 
@@ -371,3 +454,22 @@ doesn't depend on any one machine either.
 - **No multi-user/authentication story.** Fine for the current one-
   machine, one-location deployment (per the brief); "who did this" in the
   audit log is only ever the Windows account name, not a real login.
+- **Auto-update (2026-09-11) not yet verified end-to-end.** `updater/`
+  checks a OneDrive-hosted manifest and, on confirmation, downloads,
+  verifies, and installs a new version — but this was built and tested
+  from a Linux sandbox with no real OneDrive account or Windows machine
+  to actually run the swap against. Run one full update cycle on a
+  non-production machine (see README's "Publishing an update" section)
+  before relying on it for the company machine. Also worth deciding
+  deliberately, not by default: right now ANY newer `version.json`
+  someone could get written to that OneDrive share becomes something
+  every machine running this app will offer to install and run — that's
+  an acceptable risk for a one-person-publishing, internal tool today,
+  but would need real access control (or code signing + a signature
+  check before applying) if this app or its publishing process ever
+  involves more than one trusted person.
+- **Multiple company machines, each with their own separate records.**
+  See "Setting up a second device via USB"'s note above — nothing about
+  the auto-updater changes this. Every machine keeps its own local
+  database; there's still no shared/networked record store across
+  machines.

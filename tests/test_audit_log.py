@@ -136,6 +136,37 @@ class LogEventFormatTest(AuditLogTestCase):
         # plausible date, not the exact format (that's logging's job).
         self.assertRegex(first_line, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} event=")
 
+    # -- 2026-09-11: auto-update events (see updater/) --------------------
+
+    def test_update_available_logs_both_versions(self):
+        audit_log.log_update_available("1.0.0", "1.1.0")
+        content = self._read_log()
+        self.assertIn("event=update_available", content)
+        self.assertIn("current_version=1.0.0", content)
+        self.assertIn("new_version=1.1.0", content)
+
+    def test_update_declined_logs_both_versions(self):
+        audit_log.log_update_declined("1.0.0", "1.1.0")
+        content = self._read_log()
+        self.assertIn("event=update_declined", content)
+        self.assertIn("current_version=1.0.0", content)
+        self.assertIn("new_version=1.1.0", content)
+
+    def test_update_applied_logs_from_and_to_versions(self):
+        audit_log.log_update_applied("1.0.0", "1.1.0")
+        content = self._read_log()
+        self.assertIn("event=update_applied", content)
+        self.assertIn("from_version=1.0.0", content)
+        self.assertIn("to_version=1.1.0", content)
+
+    def test_update_failed_logs_the_failure_message(self):
+        audit_log.log_update_failed("1.0.0", "1.1.0", "sha256 mismatch")
+        content = self._read_log()
+        self.assertIn("event=update_failed", content)
+        self.assertIn("current_version=1.0.0", content)
+        self.assertIn("new_version=1.1.0", content)
+        self.assertIn("sha256 mismatch", content)
+
 
 if __name__ == "__main__":
     unittest.main()
