@@ -1,14 +1,23 @@
 """
-"New IDL" data entry screen — deliberately mirrors LAA's own field layout
-(Surname, First Name, Father's Name, ... Original Document, Issued Document,
-Receipt) so staff already trained on LAA don't have to relearn anything.
+"New IDL" data entry screen — originally mirrored LAA's own field layout
+(Surname, First Name, Father's Name, Mother's Name, ... Original Document,
+Issued Document, Receipt) so staff already trained on LAA wouldn't have to
+relearn anything. As of 2026-09-14 the personal-details group is trimmed
+down from LAA's full set to just Surname, First Name, Father's Name,
+Place of B., and Date of B. — Mother's Name/Address/Phone/Email/Blood Type
+were dropped from this screen entirely (on request, to cut clutter this
+company doesn't use day to day). Original Document and Issued Document
+still mirror LAA's groups in full.
 
 The one addition over LAA: three labeled photo upload boxes (Passport,
 License Front, License Back) and an Autofill button that runs the OCR
 pipeline (ocr.pipeline) once all three are filled, populating every field
 it can, leaving Phone/Email/Issued-Document-Number blank for manual entry,
 and flagging (in orange) any field whose OCR confidence or checksum was low
-so staff know exactly what to double check before saving.
+so staff know exactly what to double check before saving. (ocr/pipeline.py
+still computes Mother's Name/Address/Blood Type internally even though this
+screen has nowhere to show them anymore — see set_field's docstring for why
+that's harmless rather than a bug.)
 
 2026-09-07: added "Find / Reprint Record..." (see gui/records_screen.py)
 and "New" — the app previously had no way back to a record once Save was
@@ -20,6 +29,15 @@ new one; "New" resets back to a blank insert-a-new-record state. Every
 autofill run, record save (with a field-by-field before/after diff), and
 print is now also recorded to a persistent audit log regardless of the
 IDL_APP_DEBUG_OCR flag below — see db/audit_log.py.
+
+2026-09-14: two more small on-request changes, both about matching what
+the company actually does every time rather than making staff retype it:
+"Original Document.Place of Issue" now defaults to "CGCV" (every IDL this
+company issues goes through the same office) — see DEFAULT_PLACE_OF_ISSUE
+below — and "Receipt.Received from" auto-fills live from Surname + First
+Name as they're typed, unless staff have typed something else into it by
+hand — see _sync_received_from_name's docstring for exactly how that's
+kept from clobbering a manual entry.
 """
 
 import logging
@@ -61,6 +79,15 @@ DEBUG_OCR = os.environ.get("IDL_APP_DEBUG_OCR", "").strip().lower() in ("1", "tr
 
 FLAG_STYLE = "background-color: #fff3cd; border: 1px solid #e0a800; color: #000;"
 NORMAL_STYLE = ""
+
+# 2026-09-14: every IDL this company issues is through the same branch/
+# office, so "Original Document.Place of Issue" is always "CGCV" in
+# practice — defaulted here (still a plain editable QLineEdit, not
+# locked, in case a genuine exception ever comes up) so staff don't have
+# to type the same three letters on every single record. Applied both at
+# form construction and by reset_to_new_record() (see below) so it comes
+# back after "New" the same way Issued Document.Date's today-default does.
+DEFAULT_PLACE_OF_ISSUE = "CGCV"
 
 
 class AutofillWorker(QThread):
@@ -206,13 +233,19 @@ class NewIDLForm(QMainWindow):
         columns.addWidget(left_scroll, stretch=2)
 
         # --- Personal details (matches LAA's top field group)
+        # 2026-09-14: trimmed from LAA's full field set (which also has
+        # Mother's Name, Address, Phone, Email, Blood Type) down to just
+        # the five Georgio said the company actually needs day-to-day —
+        # on request, to cut clutter on the entry screen. This is a GUI
+        # change only: ocr/pipeline.py still computes Mother's Name/
+        # Address/Blood Type from OCR internally (harmless, just unused),
+        # and set_field() below already silently no-ops for any key that
+        # isn't in self.fields, so nothing crashes when autofill tries to
+        # populate a field this screen no longer has.
         personal_box = QGroupBox()
         personal_form = QFormLayout()
         self.fields = {}
-        for label in [
-            "Surname", "First Name", "Father's Name", "Mother's Name",
-            "Place of B.", "Date of B.", "Address", "Phone", "Email", "Blood Type",
-        ]:
+        for label in ["Surname", "First Name", "Father's Name", "Place of B.", "Date of B."]:
             edit = QLineEdit()
             self.fields[label] = edit
             personal_form.addRow(label + ":", edit)
@@ -318,6 +351,20 @@ class NewIDLForm(QMainWindow):
         # (zero-padded %d/%m/%Y, not %-d/%-m — the "-" no-pad flag is Unix-only
         # and raises ValueError on Windows, which is this app's target platform)
         self.fields["Issued Document.Date"].setText(date.today().strftime("%d/%m/%Y"))
+        self.fields["Original Document.Place of Issue"].setText(DEFAULT_PLACE_OF_ISSUE)
+
+        # 2026-09-14: "Receipt.Received from" auto-fills live from
+        # Surname + First Name as they're typed, so staff don't have to
+        # retype the applicant's name a second time in the Receipt
+        # section (on request). self._receipt_received_from_auto tracks
+        # the last value THIS sync wrote, so _sync_received_from_name can
+        # tell "still following the auto-generated name" apart from "staff
+        # typed something else on purpose" (e.g. someone else picking up
+        # the document/paying on the applicant's behalf) and only ever
+        # overwrites in the first case — see that method's docstring.
+        self._receipt_received_from_auto = ""
+        self.fields["Surname"].textChanged.connect(self._sync_received_from_name)
+        self.fields["First Name"].textChanged.connect(self._sync_received_from_name)
 
         self._worker = None
         self._progress = None
@@ -388,6 +435,26 @@ class NewIDLForm(QMainWindow):
             for box in (self.passport_box, self.license_front_box, self.license_back_box)
         )
         self.autofill_btn.setEnabled(all_filled)
+
+    def _sync_received_from_name(self):
+        """Keeps "Receipt.Received from" following "{First Name} {Surname}"
+        live as either changes (2026-09-14, on request) — but only while
+        the field still holds either nothing, or exactly what this method
+        last wrote there itself. The moment someone types something else
+        into "Received from" by hand (a different person picking up or
+        paying for the document), that comparison stops matching and this
+        stops touching the field until it's cleared back to empty —
+        so a manual correction never gets silently overwritten by the
+        next keystroke in Surname or First Name."""
+        first = self.fields["First Name"].text().strip()
+        surname = self.fields["Surname"].text().strip()
+        computed = " ".join(part for part in (first, surname) if part)
+
+        receipt_field = self.fields["Receipt.Received from"]
+        current = receipt_field.text()
+        if current == "" or current == self._receipt_received_from_auto:
+            receipt_field.setText(computed)
+            self._receipt_received_from_auto = computed
 
     def set_field(self, key: str, value: str, flagged: bool = False):
         if key not in self.fields:
@@ -472,6 +539,13 @@ class NewIDLForm(QMainWindow):
         for box in (self.passport_box, self.license_front_box, self.license_back_box):
             box.clear_image()
         self.fields["Issued Document.Date"].setText(date.today().strftime("%d/%m/%Y"))
+        self.fields["Original Document.Place of Issue"].setText(DEFAULT_PLACE_OF_ISSUE)
+        # Both cleared above via the loop (Surname/First Name -> "" already
+        # drove Receipt.Received from back to "" through the live sync),
+        # but reset the tracker explicitly too so a fresh record starts
+        # with sync fully re-armed rather than relying on that as a side
+        # effect.
+        self._receipt_received_from_auto = ""
         self.current_record_id = None
         self._save_baseline = None
         self.title_label.setText("Creating New IDL")
