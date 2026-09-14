@@ -9,6 +9,12 @@ Regression tests for gui/new_idl_form.py's 2026-09-14 changes (on request):
      either is typed, unless staff have typed something else into it by
      hand -- see _sync_received_from_name's docstring in new_idl_form.py
      for the exact rule.
+  4. Autofill never overwrites "Original Document.Place of Issue" with
+     whatever OCR actually read off the physical license (field 4c) --
+     found in real use: a real license prints the code plus its Arabic
+     name together (e.g. "CGCV السير إدارة"), and applying that raw text was
+     defeating the CGCV default on every single Autofill run. See
+     NEVER_AUTOFILLED_FIELDS in new_idl_form.py.
 
 These instantiate the REAL NewIDLForm widget (not a mock of it) against a
 real, isolated QApplication, run headless via QT_QPA_PLATFORM=offscreen --
@@ -45,7 +51,9 @@ from PySide6.QtWidgets import QApplication
 _app = QApplication.instance() or QApplication([])
 
 with mock.patch("gui.new_idl_form.Storage"):
-    from gui.new_idl_form import DEFAULT_PLACE_OF_ISSUE, NewIDLForm
+    from gui.new_idl_form import DEFAULT_PLACE_OF_ISSUE, NEVER_AUTOFILLED_FIELDS, NewIDLForm
+
+from ocr.pipeline import AutofillResult, FormField
 
 
 def _make_form() -> NewIDLForm:
@@ -95,6 +103,75 @@ class PlaceOfIssueDefaultTest(unittest.TestCase):
         form = _make_form()
         expected = date.today().strftime("%d/%m/%Y")
         self.assertEqual(form.fields["Issued Document.Date"].text(), expected)
+
+
+def _fake_autofill_result(**field_values: str) -> AutofillResult:
+    """Builds a minimal AutofillResult the way ocr/pipeline.py would,
+    covering only the keys a test actually cares about (all non-flagged,
+    real-value fields) -- good enough to drive _on_autofill_succeeded
+    without needing a real OCR run."""
+    return AutofillResult(
+        fields={key: FormField(value, False, "license") for key, value in field_values.items()},
+        errors=[],
+    )
+
+
+class AutofillNeverOverwritesPlaceOfIssueTest(unittest.TestCase):
+    """Regression coverage for a real bug hit in production use: a real
+    Lebanese license prints its issuing-authority field (4c) as the code
+    plus its Arabic name together, e.g. "CGCV السير إدارة" -- and applying
+    that raw OCR text was overwriting the CGCV default on every single
+    Autofill run. See NEVER_AUTOFILLED_FIELDS in new_idl_form.py."""
+
+    def setUp(self):
+        self.form = _make_form()
+        # _on_autofill_succeeded ends with a real QMessageBox.information(...)
+        # -- a MODAL call that blocks on a click that will never come in a
+        # headless test run. Patched out for every test in this class so
+        # calling _on_autofill_succeeded doesn't hang the test suite.
+        patcher = mock.patch("gui.new_idl_form.QMessageBox")
+        self.addCleanup(patcher.stop)
+        patcher.start()
+
+    def test_place_of_issue_key_is_in_the_never_autofilled_set(self):
+        self.assertIn("Original Document.Place of Issue", NEVER_AUTOFILLED_FIELDS)
+
+    def test_autofill_result_with_real_printed_bilingual_text_does_not_overwrite_cgcv(self):
+        result = _fake_autofill_result(**{
+            "Surname": "SFEIR",
+            "Original Document.Place of Issue": "CGCV السير إدارة",
+        })
+
+        self.form._on_autofill_succeeded(result)
+
+        self.assertEqual(self.form.fields["Original Document.Place of Issue"].text(), "CGCV")
+        # Confirms the skip is specific to Place of Issue, not a blanket
+        # "autofill did nothing" failure -- Surname should still apply.
+        self.assertEqual(self.form.fields["Surname"].text(), "SFEIR")
+
+    def test_a_manual_override_of_place_of_issue_also_survives_autofill(self):
+        self.form.fields["Original Document.Place of Issue"].setText("BEIRUT")
+        result = _fake_autofill_result(**{
+            "Original Document.Place of Issue": "CGCV السير إدارة",
+        })
+
+        self.form._on_autofill_succeeded(result)
+
+        self.assertEqual(self.form.fields["Original Document.Place of Issue"].text(), "BEIRUT")
+
+    def test_filled_count_passed_to_the_audit_log_excludes_place_of_issue(self):
+        result = _fake_autofill_result(**{
+            "Surname": "SFEIR",
+            "First Name": "CHARBEL",
+            "Original Document.Place of Issue": "CGCV السير إدارة",
+        })
+
+        with mock.patch("gui.new_idl_form.log_autofill_run") as log_mock:
+            self.form._on_autofill_succeeded(result)
+
+        # Surname + First Name = 2 -- Place of Issue must not add a 3rd,
+        # since it was never actually applied to the screen.
+        self.assertEqual(log_mock.call_args.args[3], 2)
 
 
 class ReceivedFromLiveSyncTest(unittest.TestCase):

@@ -89,6 +89,23 @@ NORMAL_STYLE = ""
 # back after "New" the same way Issued Document.Date's today-default does.
 DEFAULT_PLACE_OF_ISSUE = "CGCV"
 
+# 2026-09-14: found in real use the day after DEFAULT_PLACE_OF_ISSUE was
+# added -- ocr/pipeline.py's "Original Document.Place of Issue" (license
+# field 4c, the issuing-authority box) reads whatever is actually PRINTED
+# on the physical license, which on a real Lebanese license is the code
+# plus its Arabic name together (e.g. "CGCV السير إدارة"), not just the
+# bare code -- and _on_autofill_succeeded below was applying that raw OCR
+# text straight over the CGCV default on every Autofill run, defeating
+# the whole point of the default. Fixed the same way Phone/Email/
+# Issued-Document-Number are already deliberately left for manual entry
+# (see this module's docstring): "Original Document.Place of Issue" is
+# never written by Autofill at all, regardless of what OCR reads there --
+# it stays exactly "CGCV" (or whatever staff typed over it by hand) no
+# matter how many times Autofill runs on this record. ocr/pipeline.py
+# still computes it internally; this is a GUI-side "never apply it" list,
+# same pattern as the personal fields trimmed off this screen entirely.
+NEVER_AUTOFILLED_FIELDS = {"Original Document.Place of Issue"}
+
 
 class AutofillWorker(QThread):
     """Runs the OCR pipeline off the UI thread — a single autofill makes
@@ -651,13 +668,19 @@ class NewIDLForm(QMainWindow):
         fields = result.fields
         flagged_count = 0
         for key, form_field in fields.items():
+            if key in NEVER_AUTOFILLED_FIELDS:
+                continue  # e.g. Place of Issue -- always stays DEFAULT_PLACE_OF_ISSUE, see that set's docstring
             if not form_field.value and not form_field.flagged:
                 continue  # never-autofilled fields (Phone, Email, Receipt.*, ...) - leave untouched
             self.set_field(key, form_field.value, flagged=form_field.flagged)
             if form_field.flagged:
                 flagged_count += 1
 
-        filled_count = sum(1 for f in fields.values() if f.value)
+        # Matches the loop above: a field this run never actually applied
+        # to the screen (NEVER_AUTOFILLED_FIELDS) shouldn't count toward
+        # "how many fields Autofill filled in" either, or the audit log's
+        # filled=N would overstate what staff actually saw change.
+        filled_count = sum(1 for key, f in fields.items() if f.value and key not in NEVER_AUTOFILLED_FIELDS)
 
         # 2026-09-07: snapshot what autofill just produced as the baseline
         # save_record diffs against — every currently-populated field, not
