@@ -338,6 +338,50 @@ def _strip_leading_field_number(text: str, field_key: str) -> str:
     return text
 
 
+# 2026-09-14: fields "4a" (issue date) and "4b" (expiry date) have the
+# identical inert-whitelist problem "13b" had before _normalize_blood_type
+# existed -- INLINE_LABEL_FIELDS' "0123456789/" whitelist for these two
+# fields (see that dict's docstring) is inert under Vision (no character-
+# whitelist concept), so nothing actually stops a letter/digit lookalike
+# from surviving into the field's text. Confirmed in real use (Charbel
+# Sfeir photo, IDL_APP_DEBUG_OCR dump): the expiry date read back as
+# "DB / 09 / 2024" -- almost certainly "08/09/2024" misread the same
+# direction _normalize_blood_type already corrects for "13b" ("0"<->letter
+# lookalikes), just with "0"->"D" and "8"->"B" instead of "0"->"O". Per
+# Georgio (2026-09-14): a date field must never contain letters -- there is
+# no such thing as a genuine letter in a DD/MM/YYYY date printed on this
+# license, so any letter that survives OCR is always a misread digit, never
+# a genuine character. Known lookalikes are corrected via the mapping
+# below; if what's left still isn't a clean D+/M+/Y+ shape (either an
+# unmapped character, or digits missing/extra), extract_license_front flags
+# the field instead of silently showing something wrong -- same "correct
+# what's confidently a known misread, flag what isn't" split as "13b".
+_DATE_FIELDS: frozenset[str] = frozenset({"4a", "4b"})
+_DATE_LETTER_MISREAD_TO_DIGIT = {
+    "D": "0", "O": "0", "o": "0", "Q": "0",
+    "I": "1", "l": "1", "i": "1",
+    "Z": "2", "z": "2",
+    "B": "8",
+    "S": "5", "s": "5",
+    "G": "6",
+    "T": "7",
+}
+_CLEAN_DATE_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{4}$")
+
+
+def _normalize_date_field(text: str) -> str:
+    """Corrects known digit/letter lookalikes (see
+    _DATE_LETTER_MISREAD_TO_DIGIT above) in a DD/MM/YYYY-formatted license
+    date field, and collapses whitespace around the slashes the same way a
+    generous inline-label crop can leave some (e.g. "DB / 09 / 2024") --
+    same rationale as _normalize_blood_type's own whitespace strip. Does
+    NOT itself flag/validate the result -- extract_license_front checks it
+    against _CLEAN_DATE_RE and flags the field when it still isn't a clean
+    date, the same two-step pattern "13b" uses with _CLEAN_BLOOD_TYPE_RE."""
+    text = re.sub(r"\s*/\s*", "/", text.strip())
+    return "".join(_DATE_LETTER_MISREAD_TO_DIGIT.get(ch, ch) for ch in text)
+
+
 def _words_to_text(words: list[OcrWord]) -> str:
     """Joins OCR words back into text ourselves (grouping into lines by
     vertical proximity, left-to-right within each line, top-to-bottom
@@ -559,6 +603,15 @@ def extract_license_front(image_path: str, debug_dir: str | None = None) -> Lice
                     fallback_value = _normalize_blood_type_from_words(captured_words)
                     if fallback_value:
                         read.value = fallback_value
+            elif key in _DATE_FIELDS:
+                if read.value:
+                    read.value = _normalize_date_field(read.value)
+                if read.value and not _CLEAN_DATE_RE.fullmatch(read.value):
+                    # Not a clean DD/MM/YYYY shape even after correcting
+                    # known letter->digit lookalikes -- per Georgio, a date
+                    # must never show letters, so this is surfaced to staff
+                    # for manual review rather than displayed as-is.
+                    read.flagged = True
         else:
             read = _ocr_crop(card, region, f"front_{key}", debug_dir, errors, keep_arabic=keep_arabic,
                               rebuild_text_from_words=key in _LEADING_FIELD_NUMBER_FIELDS)

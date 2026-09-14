@@ -126,7 +126,14 @@ class PartialLicenseFailureTest(unittest.TestCase):
         self.assertTrue(result.fields["1"].flagged)
         self.assertEqual(result.fields["2"].value, "SOMEVALUE")
         self.assertFalse(result.fields["2"].flagged)
-        self.assertEqual(result.fields["4a"].value, "SOMEVALUE")
+        # "4a" is a date field: since 2026-09-14 it runs through
+        # _normalize_date_field regardless of what OCR returned (see
+        # tests/test_date_field_normalization.py) -- "SOMEVALUE" isn't a
+        # real date, but the point of this assertion is unchanged, that
+        # the field was populated at all rather than left blank by the
+        # cascading failure this test guards against. "S"->"5" and "O"->"0"
+        # are known digit lookalikes the normalizer corrects unconditionally.
+        self.assertEqual(result.fields["4a"].value, "50MEVALUE")
 
 
 if __name__ == "__main__":
