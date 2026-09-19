@@ -79,34 +79,52 @@ Save" failure mode can no longer happen via the Print path either — see
 print_to_printer's own docstring for why save-before-print (rather than
 after) was the deliberate choice.
 
-2026-09-19 (a third, separate request the same day): Georgio shared a
-video of LAA's own "◀ ▶" toolbar arrows, which step straight from one
-saved record to the next/previous one — no Search dialog, no re-typing a
-driving license number each time. Added "◀ Previous"/"Next ▶" buttons
-next to "Find / Reprint Record..." (see _go_to_relative_record) that do
-the same thing here: they load the previous/next record (ordered by id,
-i.e. save order) straight into the form via the same _load_record path
-"Open for Edit" already uses. Deliberately does NOT warn about unsaved
-changes first — nothing else on this form does either (New, Open for
-Edit, and Clone all overwrite the form's current contents outright), so
-Previous/Next stays consistent with that rather than being the one
-button that suddenly asks.
+2026-09-19 (a third, separate request the same day, from a second video):
+Georgio shared a video of LAA's own "◀ ▶" toolbar arrows, which step
+straight from one saved record to the next/previous one — no Search
+dialog, no re-typing a driving license number each time. Added
+"◀ Previous"/"Next ▶" buttons next to "Find / Reprint Record..." (see
+_go_to_relative_record) that do the same thing here: they load the
+previous/next record (ordered by id, i.e. save order) straight into the
+form via the same _load_record path "Open for Edit" already uses.
+Deliberately does NOT warn about unsaved changes first — nothing else on
+this form does either (New, Open for Edit, and Clone all overwrite the
+form's current contents outright), so Previous/Next stays consistent
+with that rather than being the one button that suddenly asks.
 
 2026-09-19 (same video, same request — "also add branch and name"): that
 same LAA recording shows every record's Receipt group ending with
 "Branch: <office>" / "User: <staff name>", which this screen had no
 fields for at all. Added "Receipt.Branch" and "Receipt.User" as a paired
 row (see _add_paired_row) under Amount(LBP)/Date, matching where LAA
-shows them. Both are plain manually-typed text, same as Phone/Email/
-Signature — Autofill never touches them and Save/Print don't require
-them. They carry over differently on Clone (see _clone_record): Branch
-describes the office, which stays the same transaction to transaction —
-Georgio has already established that pattern for
-Original Document.Place of Issue (DEFAULT_PLACE_OF_ISSUE) — so it's left
-alone by Clone's copy loop; User describes who's handling THIS
-transaction, which a new client visit shouldn't assume carries over from
-whoever handled the source record, so Clone resets it blank the same way
-it resets Issued Document.Number.
+shows them — at the time, both were plain manually-typed text, same as
+Phone/Email/Signature. (Receipt.User's story doesn't end there — see the
+next paragraph, the same day.)
+
+2026-09-19 (a fourth, separate request the same day, from a third video):
+Georgio shared a video of LAA's own login screen (Username + Password
+before the app even opens), confirming Receipt.User was meant to come
+from WHO'S LOGGED IN, not be typed by hand. Added a real staff login
+system: gui/login_dialog.py's LoginDialog is shown once, at startup,
+before this window ever opens (see main() below), checked against
+accounts in db/storage.py's new staff_users table (passwords hashed,
+never stored recoverably). "Receipt.User" is now READ-ONLY (see
+_add_paired_row's read_only param) and auto-filled from
+self.current_username — the whole reason for requiring login at all was
+so this field can't just be typed as someone else's name, which also
+means it no longer needs Branch's "carries over on Clone / resets on New"
+treatment described above: it's simply set from self.current_username
+every time a NEW record starts (construction, reset_to_new_record,
+_clone_record), reflecting whoever is logged in right now rather than
+either the old record's value or a blank. _load_record is the one
+exception — it leaves Receipt.User exactly as that record already has
+it, so opening an old record for editing still shows who originally
+created IT, not today's logged-in user, the same "preserve the original
+transaction's own history" reasoning _clone_record's docstring already
+gives for why Original Document's fields carry over unchanged on Clone.
+New accounts after the very first (LoginDialog's bootstrap mode creates
+that one on a fresh install) are added via "Manage Staff Accounts..."
+(gui/manage_users_dialog.py).
 """
 
 import logging
@@ -130,6 +148,8 @@ from db.audit_log import (
 )
 from db.storage import APP_DATA_DIR, Storage
 from gui.image_upload_box import ImageUploadBox
+from gui.login_dialog import run_login
+from gui.manage_users_dialog import ManageUsersDialog
 from gui.printer_settings_dialog import PrinterSettingsDialog
 from gui.records_screen import RecordsScreen
 from ocr.pipeline import run_autofill_pipeline
@@ -148,6 +168,29 @@ DEBUG_OCR = os.environ.get("IDL_APP_DEBUG_OCR", "").strip().lower() in ("1", "tr
 
 FLAG_STYLE = "background-color: #fff3cd; border: 1px solid #e0a800; color: #000;"
 NORMAL_STYLE = ""
+# 2026-09-19: "Receipt.User" is read-only (see the login-system paragraph
+# in this module's docstring and _add_paired_row's read_only param) --
+# styled visibly greyed-out so staff can tell at a glance it's not a
+# field they can type into, the same way a disabled QPushButton already
+# looks different from an enabled one.
+READ_ONLY_FIELD_STYLE = "background-color: #e9ecef; color: #495057;"
+
+# 2026-09-19: the only read-only field so far -- see _add_paired_row's
+# read_only2 param and READ_ONLY_FIELD_STYLE above. Kept as a set (not a
+# hardcoded string literal repeated at each call site) so _load_record/
+# _clone_record/reset_to_new_record's "reset every field's style to
+# NORMAL_STYLE" loops (see _style_for_field just below) don't need to
+# know the field's name specifically, only whether it's in this set.
+READ_ONLY_FIELDS = {"Receipt.User"}
+
+
+def _style_for_field(key: str) -> str:
+    """NORMAL_STYLE for every ordinary field, but READ_ONLY_FIELD_STYLE
+    for anything in READ_ONLY_FIELDS -- used anywhere a field's styling
+    gets reset in bulk (loading/cloning/resetting a record) so a
+    read-only field's grey background survives that reset instead of
+    being wiped back to a normal, editable-looking white."""
+    return READ_ONLY_FIELD_STYLE if key in READ_ONLY_FIELDS else NORMAL_STYLE
 
 # 2026-09-19: "make the words bigger and everything bigger" (on request,
 # comparing against a screenshot of LAA's own, larger-looking screen).
@@ -262,7 +305,18 @@ class UpdateCheckWorker(QThread):
 
 
 class NewIDLForm(QMainWindow):
-    def __init__(self):
+    def __init__(self, storage: Storage | None = None, username: str | None = None):
+        """storage/username: 2026-09-19, for the staff login system (see
+        this module's docstring) — main() below logs in via
+        gui/login_dialog.py BEFORE this window is constructed, then hands
+        the already-open Storage and the logged-in username in here
+        rather than each being figured out twice. Both stay optional
+        (defaulting to a fresh Storage() and no username) so every
+        existing direct `NewIDLForm()` call — every test in
+        tests/test_new_idl_form*.py, which predates the login system —
+        keeps working unchanged; self.current_username simply stays None
+        in that case, same as a not-logged-in Receipt.User always used to
+        be blank."""
         super().__init__()
         self.setWindowTitle("New IDL — Auto-fill")
         # 1050x900: bumped up from 880x780 (2026-09-19) alongside
@@ -308,6 +362,14 @@ class NewIDLForm(QMainWindow):
         self.next_record_btn.clicked.connect(self.go_to_next_record)
         self.printer_settings_btn = QPushButton("Printer Settings...")
         self.printer_settings_btn.clicked.connect(self.open_printer_settings)
+        # 2026-09-19: opens gui/manage_users_dialog.py's ManageUsersDialog
+        # -- the only way to add a staff account after the very first one
+        # (which LoginDialog's own bootstrap mode creates on a fresh
+        # install, see this module's docstring). Grouped with Printer
+        # Settings since both are "one-time-per-machine setup", not
+        # something touched per record.
+        self.manage_users_btn = QPushButton("Manage Staff Accounts...")
+        self.manage_users_btn.clicked.connect(self.open_manage_users)
         self.new_btn = QPushButton("New")
         self.new_btn.clicked.connect(self.reset_to_new_record)
         self.save_btn = QPushButton("Save")
@@ -322,6 +384,7 @@ class NewIDLForm(QMainWindow):
         top_bar.addWidget(self.prev_record_btn)
         top_bar.addWidget(self.next_record_btn)
         top_bar.addWidget(self.printer_settings_btn)
+        top_bar.addWidget(self.manage_users_btn)
         top_bar.addStretch()
         top_bar.addWidget(self.new_btn)
         top_bar.addWidget(self.save_btn)
@@ -404,10 +467,21 @@ class NewIDLForm(QMainWindow):
         # is why this couldn't be done without changing layout type. See
         # _add_paired_row/_add_full_row just below and this module's
         # docstring for the full 2026-09-19 change.
-        def _add_paired_row(grid: QGridLayout, row: int, label1: str, key1: str, label2: str, key2: str):
+        def _add_paired_row(
+            grid: QGridLayout, row: int, label1: str, key1: str, label2: str, key2: str,
+            read_only2: bool = False,
+        ):
+            # read_only2: 2026-09-19, added for Receipt.User (see this
+            # module's docstring's login-system paragraph) -- only the
+            # SECOND field of a pair has ever needed this so far, so a
+            # single flag (rather than read_only1/read_only2 both) keeps
+            # every existing call site unchanged.
             edit1, edit2 = QLineEdit(), QLineEdit()
             self.fields[key1] = edit1
             self.fields[key2] = edit2
+            if read_only2:
+                edit2.setReadOnly(True)
+                edit2.setStyleSheet(READ_ONLY_FIELD_STYLE)
             grid.addWidget(QLabel(label1 + ":"), row, 0)
             grid.addWidget(edit1, row, 1)
             grid.addWidget(QLabel(label2 + ":"), row, 2)
@@ -456,10 +530,15 @@ class NewIDLForm(QMainWindow):
         _add_full_row(receipt_grid, 0, "Received from", "Receipt.Received from")
         _add_paired_row(receipt_grid, 1, "Amount(LBP)", "Receipt.Amount(LBP)", "Date", "Receipt.Date")
         # 2026-09-19: "Branch"/"User" -- LAA's own screen shows both at the
-        # bottom of this same group (see this module's docstring). Plain
-        # manually-typed text, same treatment as Phone/Email/Signature:
-        # never touched by Autofill, never required to Save/Print.
-        _add_paired_row(receipt_grid, 2, "Branch", "Receipt.Branch", "User", "Receipt.User")
+        # bottom of this same group (see this module's docstring). Branch
+        # is plain manually-typed text, same treatment as Phone/Email/
+        # Signature: never touched by Autofill, never required to
+        # Save/Print. User is READ-ONLY (read_only2) -- it's driven by the
+        # staff login system added later the same day (see this module's
+        # docstring), not typed by hand at all.
+        _add_paired_row(
+            receipt_grid, 2, "Branch", "Receipt.Branch", "User", "Receipt.User", read_only2=True,
+        )
         _set_value_column_stretch(receipt_grid)
         receipt_box.setLayout(receipt_grid)
         left_column.addWidget(receipt_box)
@@ -550,7 +629,17 @@ class NewIDLForm(QMainWindow):
 
         self._worker = None
         self._progress = None
-        self.storage = Storage()
+        self.storage = storage if storage is not None else Storage()
+        self.current_username = username
+        # See _add_paired_row's read_only2 usage above and this module's
+        # docstring: Receipt.User always reflects whoever is logged in for
+        # a brand new record -- set here for construction, and again by
+        # reset_to_new_record/_clone_record for the same reason each of
+        # THOSE starts a new record too. Left "" when no one's logged in
+        # (self.current_username is None), same as every existing test
+        # that constructs NewIDLForm() directly without going through the
+        # login flow.
+        self.fields["Receipt.User"].setText(self.current_username or "")
 
         # 2026-09-07: track which saved record (if any) the form currently
         # represents, and a snapshot of the last "known good" values to
@@ -744,7 +833,7 @@ class NewIDLForm(QMainWindow):
         created."""
         for key, edit in self.fields.items():
             edit.setText(fields.get(key, ""))
-            edit.setStyleSheet(NORMAL_STYLE)
+            edit.setStyleSheet(_style_for_field(key))
         self.current_record_id = record_id
         self._save_baseline = dict(fields)
         self.title_label.setText(f"Editing IDL Record #{record_id}")
@@ -837,14 +926,17 @@ class NewIDLForm(QMainWindow):
         validation; this field stopped being auto-generated 2026-09-19,
         same day Clone was added) — "Issued Document.Date" resets to
         today, "Receipt.Date" goes blank (a new transaction's receipt
-        hasn't been dated yet), and "Receipt.User" goes blank (whoever
-        handled the client's earlier visit isn't necessarily who's
-        handling this new one, so it isn't assumed). "Receipt.Branch"
-        deliberately is NOT reset — same office, transaction to
-        transaction, same reasoning as DEFAULT_PLACE_OF_ISSUE — so it
-        carries over from the source record like any other client detail.
-        This matches LAA's own Clone behavior exactly, confirmed against a
-        real recording Georgio shared (2026-09-19).
+        hasn't been dated yet), and "Receipt.User" resets to
+        self.current_username (whoever is logged in and clicking Clone
+        right now, not necessarily whoever handled the client's earlier
+        visit — see this module's docstring's login-system paragraph;
+        it's read-only, so this is the only way it can change on a
+        clone). "Receipt.Branch" deliberately is NOT reset — same office,
+        transaction to transaction, same reasoning as
+        DEFAULT_PLACE_OF_ISSUE — so it carries over from the source
+        record like any other client detail. This matches LAA's own Clone
+        behavior exactly, confirmed against a real recording Georgio
+        shared (2026-09-19).
 
         self._receipt_received_from_auto is deliberately NOT set explicitly
         here to the cloned "Receipt.Received from" value (same as
@@ -869,14 +961,14 @@ class NewIDLForm(QMainWindow):
         reason."""
         for key, edit in self.fields.items():
             edit.setText(fields.get(key, ""))
-            edit.setStyleSheet(NORMAL_STYLE)
+            edit.setStyleSheet(_style_for_field(key))
         for box in (self.passport_box, self.license_front_box, self.license_back_box):
             box.clear_image()
 
         self.fields["Issued Document.Number"].setText("")
         self.fields["Issued Document.Date"].setText(date.today().strftime("%d/%m/%Y"))
         self.fields["Receipt.Date"].setText("")
-        self.fields["Receipt.User"].setText("")
+        self.fields["Receipt.User"].setText(self.current_username or "")
 
         self.current_record_id = None
         self._save_baseline = None
@@ -890,11 +982,15 @@ class NewIDLForm(QMainWindow):
         afterward short of restarting the app."""
         for key, edit in self.fields.items():
             edit.setText("")
-            edit.setStyleSheet(NORMAL_STYLE)
+            edit.setStyleSheet(_style_for_field(key))
         for box in (self.passport_box, self.license_front_box, self.license_back_box):
             box.clear_image()
         self.fields["Issued Document.Date"].setText(date.today().strftime("%d/%m/%Y"))
         self.fields["Original Document.Place of Issue"].setText(DEFAULT_PLACE_OF_ISSUE)
+        # See this module's docstring's login-system paragraph: a brand
+        # new record always attributes to whoever's logged in right now,
+        # same as construction and _clone_record.
+        self.fields["Receipt.User"].setText(self.current_username or "")
         # Both cleared above via the loop (Surname/First Name -> "" already
         # drove Receipt.Received from back to "" through the live sync),
         # but reset the tracker explicitly too so a fresh record starts
@@ -930,6 +1026,9 @@ class NewIDLForm(QMainWindow):
 
     def open_printer_settings(self):
         PrinterSettingsDialog(parent=self).exec()
+
+    def open_manage_users(self):
+        ManageUsersDialog(self.storage, parent=self).exec()
 
     def print_to_printer(self):
         """Sends the current form's data straight to the printer configured
@@ -1083,7 +1182,20 @@ def main():
     if DEBUG_OCR:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
     app = QApplication(sys.argv)
-    window = NewIDLForm()
+
+    # 2026-09-19: staff login, added after Georgio shared a video of
+    # LAA's own login screen (see this module's docstring's login-system
+    # paragraph) -- run_login shows LoginDialog modally (bootstrapping
+    # the very first account on a fresh install, if none exist yet) and
+    # returns the logged-in username, or None if it was cancelled/closed.
+    # The SAME Storage instance is then handed into NewIDLForm rather
+    # than it opening a second connection to the same database file.
+    storage = Storage()
+    username = run_login(storage)
+    if username is None:
+        sys.exit(0)
+
+    window = NewIDLForm(storage=storage, username=username)
     window.show()
     sys.exit(app.exec())
 

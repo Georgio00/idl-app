@@ -82,9 +82,9 @@ def _record(record_id: int, **fields: str) -> IdlRecord:
     return IdlRecord(id=record_id, created_at="2026-09-19T10:00:00", fields=fields)
 
 
-def _make_form() -> NewIDLForm:
+def _make_form(username: str | None = None) -> NewIDLForm:
     with mock.patch("gui.new_idl_form.Storage"):
-        return NewIDLForm()
+        return NewIDLForm(username=username)
 
 
 class PersonalFieldsTrimmedTest(unittest.TestCase):
@@ -355,11 +355,24 @@ class CloneRecordTest(unittest.TestCase):
         # Original Document.Place of Issue's DEFAULT_PLACE_OF_ISSUE.
         self.assertEqual(self.form.fields["Receipt.Branch"].text(), "SIN EL FIL")
 
-    def test_receipt_user_resets_to_blank(self):
-        # Whoever handled the client's earlier visit isn't necessarily
-        # who's handling this new one -- unlike Branch, this must NOT
-        # carry over from the source record.
+    def test_receipt_user_does_not_carry_over_from_the_source_record(self):
+        # SOURCE_FIELDS' "Receipt.User" is "ROULA" -- unlike Branch, this
+        # must NOT carry over untouched, since whoever handled the
+        # client's earlier visit isn't necessarily who's handling this
+        # new one. self.form has no logged-in username (see _make_form),
+        # so it resets to "" here -- see the next test for what happens
+        # with one set.
         self.assertEqual(self.form.fields["Receipt.User"].text(), "")
+
+    def test_receipt_user_resets_to_the_currently_logged_in_username(self):
+        # 2026-09-19 (the login-system follow-up, see this module's
+        # docstring): a clone is a NEW transaction, so Receipt.User
+        # reflects whoever is logged in and clicking Clone right now --
+        # NOT the source record's "ROULA" (a different staff member could
+        # be on shift) and NOT blank (someone IS logged in this time).
+        form = _make_form(username="OJEIL")
+        form._clone_record(7, dict(self.SOURCE_FIELDS))
+        self.assertEqual(form.fields["Receipt.User"].text(), "OJEIL")
 
     def test_current_record_id_stays_none_so_save_inserts_not_updates(self):
         # The core safety property: Save after a Clone must INSERT a new
@@ -507,6 +520,54 @@ class NavigateRecordsTest(unittest.TestCase):
         self.assertEqual(self.form.storage.list_records.call_count, 2)
 
 
+class LoggedInUserFieldTest(unittest.TestCase):
+    """Regression coverage for the 2026-09-19 staff login system's effect
+    on Receipt.User (see this module's docstring's login-system paragraph
+    and gui/login_dialog.py) -- the whole point of requiring login was so
+    this field reflects who's actually logged in rather than being typed
+    by hand, so these tests are really about two things: the field can't
+    be edited, and it tracks self.current_username correctly through
+    every place a NEW record gets started."""
+
+    def test_field_is_read_only(self):
+        form = _make_form(username="ROULA")
+        self.assertTrue(form.fields["Receipt.User"].isReadOnly())
+
+    def test_auto_fills_from_the_username_at_construction(self):
+        form = _make_form(username="ROULA")
+        self.assertEqual(form.fields["Receipt.User"].text(), "ROULA")
+
+    def test_stays_blank_when_constructed_with_no_username(self):
+        # Matches every pre-login-system test in this file, which
+        # constructs NewIDLForm() with no username at all.
+        form = _make_form()
+        self.assertEqual(form.fields["Receipt.User"].text(), "")
+
+    def test_reset_to_new_record_sets_it_to_the_current_username(self):
+        form = _make_form(username="ROULA")
+        form.fields["Receipt.User"].setText("")  # can't happen via the UI (read-only) -- simulates a stale value
+        form.reset_to_new_record()
+        self.assertEqual(form.fields["Receipt.User"].text(), "ROULA")
+
+    def test_load_record_preserves_the_records_own_stored_user_unchanged(self):
+        # The one exception: opening an OLD record for editing must keep
+        # showing who originally created it, not overwrite it with
+        # whoever happens to be logged in today.
+        form = _make_form(username="OJEIL")
+        form._load_record(1, {"Surname": "KORDAHI", "Receipt.User": "ROULA"})
+        self.assertEqual(form.fields["Receipt.User"].text(), "ROULA")
+
+    def test_read_only_styling_survives_load_record(self):
+        # _load_record resets every field's style via _style_for_field --
+        # confirms Receipt.User's grey read-only look isn't wiped back to
+        # a normal, editable-looking white by that reset.
+        from gui.new_idl_form import READ_ONLY_FIELD_STYLE
+
+        form = _make_form(username="OJEIL")
+        form._load_record(1, {"Surname": "KORDAHI", "Receipt.User": "ROULA"})
+        self.assertEqual(form.fields["Receipt.User"].styleSheet(), READ_ONLY_FIELD_STYLE)
+
+
 class PersistRecordTest(unittest.TestCase):
     """Regression coverage for _persist_record (added 2026-09-19, see its
     own docstring) -- the shared save logic behind both the "Save" button
@@ -652,6 +713,54 @@ class PrintAutoSaveTest(unittest.TestCase):
             self.form.print_to_printer()
 
         self.form.storage.save_record.assert_not_called()
+
+
+class MainLoginWiringTest(unittest.TestCase):
+    """Regression coverage for main()'s 2026-09-19 login wiring (see this
+    module's docstring's login-system paragraph) -- confirms the actual
+    ordering promise: the main window must never be constructed (let
+    alone shown) without a logged-in username, and a successful login's
+    storage/username must be exactly what NewIDLForm receives, not a
+    second, separate Storage(). QApplication itself is mocked out here
+    too -- a real one can't be constructed a second time in the same
+    process (this test module's own module-level `_app` already is one),
+    so main() must never be called for real, only against replaced
+    collaborators."""
+
+    def test_cancelled_login_exits_without_ever_constructing_the_main_window(self):
+        # sys.exit is given a real SystemExit side effect -- a plain mock
+        # wouldn't actually stop main()'s execution the way the real
+        # sys.exit(0) does, which would let it fall through to
+        # constructing NewIDLForm(username=None) and defeat the point of
+        # this test.
+        with mock.patch("gui.new_idl_form.QApplication"), \
+             mock.patch("gui.new_idl_form.Storage") as mock_storage_cls, \
+             mock.patch("gui.new_idl_form.run_login", return_value=None) as mock_run_login, \
+             mock.patch("gui.new_idl_form.NewIDLForm") as mock_form_cls, \
+             mock.patch("gui.new_idl_form.sys.exit", side_effect=SystemExit) as mock_exit, \
+             mock.patch("gui.new_idl_form.configure_audit_logging"), \
+             mock.patch("gui.new_idl_form.log_app_start"):
+            from gui.new_idl_form import main
+            with self.assertRaises(SystemExit):
+                main()
+
+        mock_run_login.assert_called_once_with(mock_storage_cls.return_value)
+        mock_form_cls.assert_not_called()
+        mock_exit.assert_called_once_with(0)
+
+    def test_successful_login_constructs_the_main_window_with_that_storage_and_username(self):
+        with mock.patch("gui.new_idl_form.QApplication"), \
+             mock.patch("gui.new_idl_form.Storage") as mock_storage_cls, \
+             mock.patch("gui.new_idl_form.run_login", return_value="ROULA"), \
+             mock.patch("gui.new_idl_form.NewIDLForm") as mock_form_cls, \
+             mock.patch("gui.new_idl_form.sys.exit"), \
+             mock.patch("gui.new_idl_form.configure_audit_logging"), \
+             mock.patch("gui.new_idl_form.log_app_start"):
+            from gui.new_idl_form import main
+            main()
+
+        mock_form_cls.assert_called_once_with(storage=mock_storage_cls.return_value, username="ROULA")
+        mock_form_cls.return_value.show.assert_called_once()
 
 
 if __name__ == "__main__":
