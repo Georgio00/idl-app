@@ -19,6 +19,16 @@ height so it can't get visually squeezed into overlapping the photo above
 it on a short window — see ImageUploadBox.__init__ and
 new_idl_form.py's matching QScrollArea fix for the ID Photos panel, which
 addresses the actual cause of the squeeze rather than just this symptom.
+
+2026-09-19: clicking an already-filled square now opens a full-size
+preview (gui/image_preview_dialog.py) instead of immediately re-opening
+the file browser — Georgio's request, so a staff member can actually
+compare the New IDL form's autofilled field values against the source
+photo/scan at a readable size, rather than judging OCR accuracy off a
+~110px thumbnail. Browsing for a new file is still one click away via the
+Replace button, which keeps calling self.browse() directly and is
+unaffected by this change; the square's click-to-browse behavior is also
+unchanged for as long as no image is set yet (there's nothing to preview).
 """
 
 from __future__ import annotations
@@ -33,6 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from db.storage import APP_DATA_DIR
+from gui.image_preview_dialog import ImagePreviewDialog
 from gui.pdf_page_picker import PdfPagePickerDialog
 from gui.pdf_utils import PdfError, get_page_count, render_page
 
@@ -151,7 +162,7 @@ class ImageUploadBox(QWidget):
         # _DropSquare's own default so any other future caller of this
         # widget can still get full-size thumbnails.
         self.square = _DropSquare(size=square_size)
-        self.square.clicked.connect(self.browse)
+        self.square.clicked.connect(self._on_square_clicked)
         self.square.file_chosen.connect(self.set_image)
         layout.addWidget(self.square, alignment=Qt.AlignCenter)
 
@@ -198,8 +209,20 @@ class ImageUploadBox(QWidget):
         self.square.setPixmap(QPixmap())
         self.square.setText("\U0001F4F7\n\nClick to upload\nor drag && drop")
         self.square.setStyleSheet(_EMPTY_STYLE)
+        self.square.setToolTip("")
         self.replace_btn.setVisible(False)
         self.remove_btn.setVisible(False)
+
+    def _on_square_clicked(self):
+        """Once a photo is set, clicking the square opens a full-size
+        preview (see this module's 2026-09-19 docstring note) instead of
+        re-opening the file browser — Replace is the dedicated way to swap
+        the file now. Before a photo is set there's nothing to preview, so
+        the click still opens the browser, same as it always has."""
+        if self.image_path:
+            ImagePreviewDialog.show_preview(self.image_path, self.title, parent=self)
+        else:
+            self.browse()
 
     def browse(self):
         path, _ = QFileDialog.getOpenFileName(self, self.dialog_caption, filter=IMAGE_FILTER)
@@ -269,6 +292,7 @@ class ImageUploadBox(QWidget):
         self.square.setText("")
         self.square.setPixmap(scaled)
         self.square.setStyleSheet(_FILLED_STYLE)
+        self.square.setToolTip("Click to view full-size")
         self.replace_btn.setVisible(True)
         self.remove_btn.setVisible(True)
         self.changed.emit()
