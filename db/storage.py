@@ -22,6 +22,17 @@ system added the same day, see gui/login_dialog.py. Passwords are never
 stored in any recoverable form: only a PBKDF2-HMAC-SHA256 hash + its
 random salt (see _hash_password below), so even a stolen .db file can't
 be used to log in directly.
+
+2026-09-19 (later the same day): added an is_admin flag to staff_users,
+after Georgio asked who should be able to open "Manage Staff Accounts..."
+-- originally any logged-in staff member could add/remove any account,
+which turned out to be more open than wanted. Only admin accounts can
+manage accounts now (see gui/new_idl_form.py and gui/manage_users_dialog.py).
+The very first account (created via LoginDialog's bootstrap mode on a
+fresh install) is always an admin -- otherwise a brand new install could
+end up with no one able to manage staff accounts at all. See
+delete_user/set_admin below for why the LAST remaining admin can't be
+removed or demoted either, for the same reason.
 """
 
 from __future__ import annotations
@@ -123,9 +134,25 @@ class Storage:
                 username TEXT NOT NULL UNIQUE COLLATE NOCASE,
                 password_hash TEXT NOT NULL,
                 password_salt TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                is_admin INTEGER NOT NULL DEFAULT 0
             )"""
         )
+        # 2026-09-19: is_admin migration for an install that already ran
+        # an earlier build of this same feature (CREATE TABLE IF NOT
+        # EXISTS above is a no-op once the table already exists, so an
+        # existing staff_users table wouldn't otherwise gain this
+        # column). If exactly one account already exists, it's almost
+        # certainly the one LoginDialog's bootstrap mode created before
+        # is_admin existed at all -- promoted to admin here so this
+        # install doesn't end up with zero admins and no way to ever open
+        # "Manage Staff Accounts..." again.
+        existing_columns = {row[1] for row in self._conn.execute("PRAGMA table_info(staff_users)")}
+        if "is_admin" not in existing_columns:
+            self._conn.execute("ALTER TABLE staff_users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+            (count,) = self._conn.execute("SELECT COUNT(*) FROM staff_users").fetchone()
+            if count == 1:
+                self._conn.execute("UPDATE staff_users SET is_admin = 1")
         self._conn.commit()
 
     def next_issued_document_number(self) -> str:
@@ -202,7 +229,33 @@ class Storage:
         cur = self._conn.execute("SELECT username FROM staff_users ORDER BY username COLLATE NOCASE")
         return [row[0] for row in cur.fetchall()]
 
-    def create_user(self, username: str, password: str) -> None:
+    def list_users(self) -> list[tuple[str, bool]]:
+        """Like list_usernames, but pairs each with its admin flag --
+        used by gui/manage_users_dialog.py to show which accounts can
+        manage other accounts (see this module's docstring's is_admin
+        paragraph)."""
+        cur = self._conn.execute(
+            "SELECT username, is_admin FROM staff_users ORDER BY username COLLATE NOCASE"
+        )
+        return [(username, bool(is_admin)) for username, is_admin in cur.fetchall()]
+
+    def admin_count(self) -> int:
+        cur = self._conn.execute("SELECT COUNT(*) FROM staff_users WHERE is_admin = 1")
+        (count,) = cur.fetchone()
+        return count
+
+    def is_admin(self, username: str) -> bool:
+        """False for an unknown username too (a safe default -- callers
+        like gui/new_idl_form.py use this to decide whether to show
+        "Manage Staff Accounts...", and "unknown user" should never
+        accidentally read as "admin")."""
+        cur = self._conn.execute(
+            "SELECT is_admin FROM staff_users WHERE username = ? COLLATE NOCASE", (username.strip(),)
+        )
+        row = cur.fetchone()
+        return bool(row[0]) if row is not None else False
+
+    def create_user(self, username: str, password: str, is_admin: bool = False) -> None:
         """Raises ValueError for a blank username/password or one that
         already exists (case-insensitively, see _init_schema) rather than
         letting sqlite3.IntegrityError leak out -- the login/manage-users
@@ -216,13 +269,35 @@ class Storage:
         password_hash, password_salt = _hash_password(password)
         try:
             self._conn.execute(
-                "INSERT INTO staff_users (username, password_hash, password_salt, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (username, password_hash, password_salt, datetime.now().isoformat()),
+                "INSERT INTO staff_users (username, password_hash, password_salt, created_at, is_admin) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (username, password_hash, password_salt, datetime.now().isoformat(), int(is_admin)),
             )
         except sqlite3.IntegrityError:
             raise ValueError(f"A staff account named {username!r} already exists.") from None
         self._conn.commit()
+
+    def set_admin(self, username: str, is_admin: bool) -> None:
+        """Raises ValueError for an unknown username, same as
+        change_password/delete_user, and ALSO raises ValueError rather
+        than actually demoting the very last remaining admin (is_admin=False
+        on that account) -- otherwise a single mistaken click could lock
+        every account, including this one, out of "Manage Staff
+        Accounts..." forever, with no way back in short of editing the
+        database by hand."""
+        username = username.strip()
+        if not is_admin and self.is_admin(username) and self.admin_count() <= 1:
+            raise ValueError(
+                f"{username!r} is the last remaining admin -- promote another account "
+                "to admin first, or this app could never be managed again."
+            )
+        cur = self._conn.execute(
+            "UPDATE staff_users SET is_admin = ? WHERE username = ? COLLATE NOCASE",
+            (int(is_admin), username),
+        )
+        self._conn.commit()
+        if cur.rowcount == 0:
+            raise ValueError(f"No staff account named {username!r} exists")
 
     def verify_user(self, username: str, password: str) -> bool:
         """True only for a username that exists AND a password whose hash
@@ -254,8 +329,17 @@ class Storage:
             raise ValueError(f"No staff account named {username!r} exists")
 
     def delete_user(self, username: str) -> None:
+        # Same reasoning as set_admin's last-admin guard: removing the
+        # only admin account would leave NO account able to open "Manage
+        # Staff Accounts..." ever again.
+        username = username.strip()
+        if self.is_admin(username) and self.admin_count() <= 1:
+            raise ValueError(
+                f"{username!r} is the last remaining admin -- promote another account "
+                "to admin first, or this app could never be managed again."
+            )
         cur = self._conn.execute(
-            "DELETE FROM staff_users WHERE username = ? COLLATE NOCASE", (username.strip(),)
+            "DELETE FROM staff_users WHERE username = ? COLLATE NOCASE", (username,)
         )
         self._conn.commit()
         if cur.rowcount == 0:

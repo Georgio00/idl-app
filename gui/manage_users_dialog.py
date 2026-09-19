@@ -1,24 +1,33 @@
 """
-"Manage Staff Accounts..." — add, remove, or reset the password for a
-staff login account (see gui/login_dialog.py and db/storage.py's
-staff_users table). Reachable from the main form's toolbar once someone's
-already logged in; this is the ONLY way to add an account after the very
-first one (which LoginDialog's bootstrap mode creates on a fresh install)
-— without it, there'd be no way to onboard a new staff member short of
-editing the database by hand.
+"Manage Staff Accounts..." — add, remove, reset the password for, or
+toggle admin access on a staff login account (see gui/login_dialog.py and
+db/storage.py's staff_users table). Reachable from the main form's
+toolbar, but ADMIN-ONLY: gui/new_idl_form.py hides the button entirely
+for a non-admin account and refuses to open this dialog even if called
+directly (see that module's docstring's is_admin paragraph) — this is
+the ONLY way to add an account after the very first one (which
+LoginDialog's bootstrap mode creates on a fresh install, always as an
+admin), so restricting who can reach it is what actually controls who
+can ever create or remove a staff login.
 
-Deliberately no separate "admin" role or permission tier: this is a
-single-office internal tool with a handful of staff (see db/storage.py's
-own docstring on why field-level Fernet encryption, not SQLCipher, was
-already judged proportionate at this app's scale) — anyone logged in can
-manage accounts, the same way anyone logged in can already edit any
-saved record.
+2026-09-19 (later the same day this whole login system shipped): Georgio
+asked who should be able to manage staff accounts -- originally any
+logged-in account could, which turned out to be more open than wanted.
+Every username in the list below shows "(admin)" next to it when that
+flag is set, and "Toggle Admin" flips it for the selected account.
+db/storage.py's set_admin/delete_user both refuse to demote or remove
+the LAST remaining admin (raising ValueError, caught here and shown as a
+plain warning) -- without that guard, a single click here could lock
+every account, including whoever's using this dialog right now, out of
+ever managing staff again.
 """
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QVBoxLayout,
+    QDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMessageBox, QPushButton, QVBoxLayout,
 )
 
 from db.storage import Storage
@@ -29,7 +38,7 @@ class ManageUsersDialog(QDialog):
         super().__init__(parent)
         self.storage = storage
         self.setWindowTitle("Manage Staff Accounts")
-        self.resize(380, 320)
+        self.resize(380, 340)
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Staff accounts that can log in to this app:"))
@@ -43,10 +52,17 @@ class ManageUsersDialog(QDialog):
         self.add_btn.clicked.connect(self._add_user)
         self.change_password_btn = QPushButton("Change Password...")
         self.change_password_btn.clicked.connect(self._change_password)
+        self.toggle_admin_btn = QPushButton("Toggle Admin")
+        self.toggle_admin_btn.setToolTip(
+            "Grant or revoke access to this \"Manage Staff Accounts...\" screen "
+            "for the selected account."
+        )
+        self.toggle_admin_btn.clicked.connect(self._toggle_admin)
         self.remove_btn = QPushButton("Remove")
         self.remove_btn.clicked.connect(self._remove_user)
         button_row.addWidget(self.add_btn)
         button_row.addWidget(self.change_password_btn)
+        button_row.addWidget(self.toggle_admin_btn)
         button_row.addWidget(self.remove_btn)
         layout.addLayout(button_row)
 
@@ -59,11 +75,18 @@ class ManageUsersDialog(QDialog):
 
     def _reload_users(self):
         self.user_list.clear()
-        self.user_list.addItems(self.storage.list_usernames())
+        for username, is_admin in self.storage.list_users():
+            label = f"{username} (admin)" if is_admin else username
+            item = QListWidgetItem(label)
+            # The list DISPLAYS "username (admin)", but every action below
+            # needs the raw username back -- stored as the item's own data
+            # rather than parsed back out of that display string.
+            item.setData(Qt.UserRole, username)
+            self.user_list.addItem(item)
 
     def _selected_username(self) -> str | None:
         item = self.user_list.currentItem()
-        return item.text() if item is not None else None
+        return item.data(Qt.UserRole) if item is not None else None
 
     def _add_user(self):
         username, ok = QInputDialog.getText(self, "Add Staff Account", "Username:")
@@ -74,8 +97,14 @@ class ManageUsersDialog(QDialog):
         )
         if not ok:
             return
+        make_admin = QMessageBox.question(
+            self, "Admin access",
+            f"Should {username.strip()!r} be able to open \"Manage Staff Accounts...\" "
+            "(add/remove accounts, reset passwords)?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        ) == QMessageBox.Yes
         try:
-            self.storage.create_user(username, password)
+            self.storage.create_user(username, password, is_admin=make_admin)
         except ValueError as e:
             QMessageBox.warning(self, "Could not add account", str(e))
             return
@@ -98,6 +127,22 @@ class ManageUsersDialog(QDialog):
             return
         QMessageBox.information(self, "Password changed", f"{username}'s password was updated.")
 
+    def _toggle_admin(self):
+        username = self._selected_username()
+        if username is None:
+            QMessageBox.information(self, "No selection", "Select a staff account first.")
+            return
+        currently_admin = self.storage.is_admin(username)
+        try:
+            self.storage.set_admin(username, not currently_admin)
+        except ValueError as e:
+            # The last-remaining-admin guard (see db/storage.py's
+            # set_admin) lands here -- shown as a plain warning, not
+            # allowed to silently no-op or crash.
+            QMessageBox.warning(self, "Could not change admin access", str(e))
+            return
+        self._reload_users()
+
     def _remove_user(self):
         username = self._selected_username()
         if username is None:
@@ -111,5 +156,11 @@ class ManageUsersDialog(QDialog):
         )
         if confirm != QMessageBox.Yes:
             return
-        self.storage.delete_user(username)
+        try:
+            self.storage.delete_user(username)
+        except ValueError as e:
+            # Same last-remaining-admin guard as _toggle_admin, from
+            # db/storage.py's delete_user this time.
+            QMessageBox.warning(self, "Could not remove account", str(e))
+            return
         self._reload_users()

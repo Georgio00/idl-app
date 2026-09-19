@@ -61,6 +61,19 @@ class BootstrapModeTest(unittest.TestCase):
         self.assertEqual(self.storage.user_count(), 1)
         self.assertTrue(self.storage.verify_user("ROULA", "hunter2"))
 
+    def test_the_first_account_is_created_as_an_admin(self):
+        # 2026-09-19 (later the same day, see this module's docstring's
+        # bootstrap-mode paragraph): the very first account has to be an
+        # admin, or a fresh install would have no way to ever reach
+        # "Manage Staff Accounts..." to add a second one.
+        self.dialog.username_edit.setText("ROULA")
+        self.dialog.password_edit.setText("hunter2")
+        self.dialog.confirm_edit.setText("hunter2")
+
+        self.dialog._submit()
+
+        self.assertTrue(self.storage.is_admin("ROULA"))
+
     def test_mismatched_confirm_password_blocks_submission(self):
         self.dialog.username_edit.setText("ROULA")
         self.dialog.password_edit.setText("hunter2")

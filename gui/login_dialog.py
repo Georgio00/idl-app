@@ -15,9 +15,13 @@ Two modes, chosen automatically from db.storage.Storage.user_count():
     to log in AS): instead asks for a new Username/Password/Confirm to
     create the very first account, then logs straight into it. Without
     this, a brand new install would be locked out before any account
-    could ever exist. Every account after the first is added later via
-    "Manage Staff Accounts..." (see gui/manage_users_dialog.py), reachable
-    from the main form once someone's already logged in.
+    could ever exist. That first account is always created as an ADMIN
+    (see db/storage.py's is_admin column) — added 2026-09-19, later the
+    same day, after Georgio asked who should be able to manage staff
+    accounts at all; only admins can open "Manage Staff Accounts..." (see
+    gui/manage_users_dialog.py and gui/new_idl_form.py), so the very
+    first account has to be one, or a fresh install would have no way to
+    ever add a second account.
 
 Cancelling either mode (or closing the window) means run_login returns
 None — see gui/new_idl_form.py's main(), which exits the app rather than
@@ -121,7 +125,12 @@ class LoginDialog(QDialog):
             self.confirm_edit.setFocus()
             return
         try:
-            self.storage.create_user(username, password)
+            # is_admin=True: this is the very first account on a fresh
+            # install (see this module's docstring's bootstrap-mode
+            # paragraph and db/storage.py's is_admin migration) -- it has
+            # to be an admin, or a brand new install would have no way to
+            # ever open "Manage Staff Accounts..." to add a second one.
+            self.storage.create_user(username, password, is_admin=True)
         except ValueError as e:
             QMessageBox.warning(self, "Could not create account", str(e))
             return

@@ -568,6 +568,69 @@ class LoggedInUserFieldTest(unittest.TestCase):
         self.assertEqual(form.fields["Receipt.User"].styleSheet(), READ_ONLY_FIELD_STYLE)
 
 
+def _make_form_with_admin_flag(username: str, is_admin: bool) -> NewIDLForm:
+    """Like _make_form, but pins down what self.storage.is_admin(username)
+    returns BEFORE construction -- __init__ reads it immediately to set
+    self.is_admin, so a plain MagicMock (truthy by default, see
+    AdminOnlyManageUsersTest's own docstring) would silently read as
+    "admin" unless configured first."""
+    with mock.patch("gui.new_idl_form.Storage") as mock_storage_cls:
+        mock_storage_cls.return_value.is_admin.return_value = is_admin
+        return NewIDLForm(username=username)
+
+
+class AdminOnlyManageUsersTest(unittest.TestCase):
+    """Regression coverage for the 2026-09-19 (later the same day)
+    admin-flag follow-up (see this module's docstring's second
+    login-system paragraph) -- Georgio asked who should be able to open
+    "Manage Staff Accounts...", since originally any logged-in account
+    could. Note: a plain _make_form(username=...) call (used throughout
+    LoggedInUserFieldTest above) leaves self.storage as an unconfigured
+    MagicMock, whose auto-created .is_admin(...) return value is a
+    MagicMock too -- truthy by default, same as any other unconfigured
+    mock attribute -- so those other tests incidentally end up with
+    self.is_admin=True. That's harmless there (none of them assert
+    anything about admin status or button visibility), but it does mean
+    THESE tests must configure storage.is_admin's return_value
+    explicitly via _make_form_with_admin_flag rather than relying on
+    _make_form's default mock behavior."""
+
+    # isHidden() (an explicit "was hide()/setVisible(False) called on
+    # THIS widget") rather than isVisible() (which also depends on the
+    # top-level window itself having been shown, which .show() is never
+    # called in these headless tests) -- see setVisible's Qt docs on the
+    # distinction.
+
+    def test_manage_users_button_is_visible_for_an_admin(self):
+        form = _make_form_with_admin_flag("ROULA", is_admin=True)
+        self.assertFalse(form.manage_users_btn.isHidden())
+
+    def test_manage_users_button_is_hidden_for_a_non_admin(self):
+        form = _make_form_with_admin_flag("OJEIL", is_admin=False)
+        self.assertTrue(form.manage_users_btn.isHidden())
+
+    def test_manage_users_button_is_hidden_with_no_logged_in_user(self):
+        form = _make_form()  # no username at all
+        self.assertTrue(form.manage_users_btn.isHidden())
+
+    def test_open_manage_users_opens_the_dialog_for_an_admin(self):
+        form = _make_form_with_admin_flag("ROULA", is_admin=True)
+        with mock.patch("gui.new_idl_form.ManageUsersDialog") as mock_dialog_cls:
+            form.open_manage_users()
+        mock_dialog_cls.return_value.exec.assert_called_once()
+
+    def test_open_manage_users_refuses_for_a_non_admin_even_called_directly(self):
+        # Defense-in-depth: the button is hidden, but the method itself
+        # must also refuse -- "Manage Staff Accounts..." must never open
+        # for a non-admin no matter how it's reached.
+        form = _make_form_with_admin_flag("OJEIL", is_admin=False)
+        with mock.patch("gui.new_idl_form.ManageUsersDialog") as mock_dialog_cls, \
+             mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            form.open_manage_users()
+        mock_dialog_cls.assert_not_called()
+        mock_box.warning.assert_called_once()
+
+
 class PersistRecordTest(unittest.TestCase):
     """Regression coverage for _persist_record (added 2026-09-19, see its
     own docstring) -- the shared save logic behind both the "Save" button

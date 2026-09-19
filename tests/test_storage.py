@@ -213,5 +213,141 @@ class StaffUsersTest(unittest.TestCase):
         self.assertTrue(self.storage.verify_user("OJEIL", "ojeil-password"))
 
 
+class AdminFlagTest(unittest.TestCase):
+    """Regression coverage for the 2026-09-19 is_admin column (see this
+    module's own docstring and gui/manage_users_dialog.py) -- added after
+    Georgio asked who should be able to open "Manage Staff Accounts...".
+    The two properties that matter most: a brand new account is NOT an
+    admin unless asked for explicitly, and the last remaining admin can
+    never be demoted or deleted (which would lock the app out of ever
+    managing staff again)."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp())
+        self.storage = _make_storage(self.tmp_dir)
+
+    def test_create_user_defaults_to_not_admin(self):
+        self.storage.create_user("ROULA", "hunter2")
+        self.assertFalse(self.storage.is_admin("ROULA"))
+
+    def test_create_user_can_be_made_an_admin_directly(self):
+        self.storage.create_user("ROULA", "hunter2", is_admin=True)
+        self.assertTrue(self.storage.is_admin("ROULA"))
+
+    def test_is_admin_is_false_for_an_unknown_username(self):
+        self.assertFalse(self.storage.is_admin("NOBODY"))
+
+    def test_is_admin_lookup_is_case_insensitive(self):
+        self.storage.create_user("ROULA", "hunter2", is_admin=True)
+        self.assertTrue(self.storage.is_admin("roula"))
+
+    def test_admin_count_reflects_only_admin_accounts(self):
+        self.storage.create_user("ROULA", "pw1", is_admin=True)
+        self.storage.create_user("OJEIL", "pw2", is_admin=False)
+        self.assertEqual(self.storage.admin_count(), 1)
+
+    def test_list_users_pairs_each_username_with_its_admin_flag(self):
+        self.storage.create_user("ROULA", "pw1", is_admin=True)
+        self.storage.create_user("OJEIL", "pw2", is_admin=False)
+        self.assertEqual(self.storage.list_users(), [("OJEIL", False), ("ROULA", True)])
+
+    def test_set_admin_grants_access(self):
+        self.storage.create_user("ROULA", "hunter2")
+        self.storage.set_admin("ROULA", True)
+        self.assertTrue(self.storage.is_admin("ROULA"))
+
+    def test_set_admin_can_revoke_when_another_admin_remains(self):
+        self.storage.create_user("ROULA", "pw1", is_admin=True)
+        self.storage.create_user("OJEIL", "pw2", is_admin=True)
+        self.storage.set_admin("ROULA", False)
+        self.assertFalse(self.storage.is_admin("ROULA"))
+        self.assertTrue(self.storage.is_admin("OJEIL"))
+
+    def test_set_admin_refuses_to_demote_the_last_remaining_admin(self):
+        self.storage.create_user("ROULA", "hunter2", is_admin=True)
+        with self.assertRaises(ValueError):
+            self.storage.set_admin("ROULA", False)
+        self.assertTrue(self.storage.is_admin("ROULA"))  # unchanged
+
+    def test_set_admin_for_unknown_user_raises(self):
+        with self.assertRaises(ValueError):
+            self.storage.set_admin("NOBODY", True)
+
+    def test_delete_user_refuses_to_remove_the_last_remaining_admin(self):
+        self.storage.create_user("ROULA", "hunter2", is_admin=True)
+        with self.assertRaises(ValueError):
+            self.storage.delete_user("ROULA")
+        self.assertEqual(self.storage.user_count(), 1)  # NOT removed
+
+    def test_delete_user_can_remove_an_admin_when_another_remains(self):
+        self.storage.create_user("ROULA", "pw1", is_admin=True)
+        self.storage.create_user("OJEIL", "pw2", is_admin=True)
+        self.storage.delete_user("ROULA")
+        self.assertEqual(self.storage.user_count(), 1)
+
+    def test_delete_user_freely_removes_a_non_admin_account(self):
+        # The last-remaining-admin guard must never block deleting an
+        # ordinary (non-admin) account, even when it's the only account
+        # of any kind on the machine.
+        self.storage.create_user("OJEIL", "pw2", is_admin=False)
+        self.storage.delete_user("OJEIL")
+        self.assertEqual(self.storage.user_count(), 0)
+
+
+class AdminMigrationTest(unittest.TestCase):
+    """Regression coverage for _init_schema's is_admin migration (see its
+    own comment) -- a real, immediate concern: Georgio's own machine
+    already had one account created (via LoginDialog's bootstrap mode)
+    from BEFORE the is_admin column existed at all, and re-opening that
+    same database file must not error out, nor leave that account
+    permanently unable to reach "Manage Staff Accounts...". Simulates
+    that exact situation by creating a staff_users table the OLD way
+    (no is_admin column) directly, then constructing Storage() against
+    that same file, same as reopening the app for real would."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp())
+        self.db_path = self.tmp_dir / "test.db"
+        self.key_path = self.tmp_dir / "test.key"
+
+    def _create_pre_migration_table_with_one_account(self):
+        import sqlite3
+        conn = sqlite3.connect(str(self.db_path))
+        conn.execute(
+            """CREATE TABLE staff_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO staff_users (username, password_hash, password_salt, created_at) "
+            "VALUES ('ROULA', 'fakehash', 'fakesalt', '2026-09-19T00:00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+    def test_reopening_an_old_database_does_not_error(self):
+        self._create_pre_migration_table_with_one_account()
+        Storage(db_path=self.db_path, key_path=self.key_path)  # must not raise
+
+    def test_the_sole_pre_existing_account_is_promoted_to_admin(self):
+        self._create_pre_migration_table_with_one_account()
+        storage = Storage(db_path=self.db_path, key_path=self.key_path)
+        self.assertTrue(storage.is_admin("ROULA"))
+
+    def test_a_fresh_database_is_unaffected_by_the_migration_path(self):
+        # No pre-existing table at all -- _init_schema's plain CREATE
+        # TABLE IF NOT EXISTS path should be the one that runs, and a
+        # newly created account should NOT be auto-promoted just because
+        # it happens to be the only one (that's create_user's is_admin
+        # parameter's job, not the migration's).
+        storage = _make_storage(self.tmp_dir)
+        storage.create_user("ROULA", "hunter2")
+        self.assertFalse(storage.is_admin("ROULA"))
+
+
 if __name__ == "__main__":
     unittest.main()

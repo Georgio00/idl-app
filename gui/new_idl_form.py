@@ -125,6 +125,18 @@ gives for why Original Document's fields carry over unchanged on Clone.
 New accounts after the very first (LoginDialog's bootstrap mode creates
 that one on a fresh install) are added via "Manage Staff Accounts..."
 (gui/manage_users_dialog.py).
+
+2026-09-19 (later the same day): Georgio asked who should be able to
+open "Manage Staff Accounts..." at all -- originally any logged-in
+account could add/remove any other, which turned out to be more open
+than wanted. Added an is_admin flag to accounts (db/storage.py): only an
+admin sees the "Manage Staff Accounts..." button at all (self.is_admin,
+computed once from self.storage.is_admin(self.current_username) right
+after login) and open_manage_users refuses even a direct call as
+defense-in-depth. The very first account (LoginDialog's bootstrap mode)
+is always created as an admin, and db/storage.py refuses to demote or
+delete the LAST remaining admin -- either would leave the app with no
+account able to ever manage staff again.
 """
 
 import logging
@@ -367,7 +379,11 @@ class NewIDLForm(QMainWindow):
         # (which LoginDialog's own bootstrap mode creates on a fresh
         # install, see this module's docstring). Grouped with Printer
         # Settings since both are "one-time-per-machine setup", not
-        # something touched per record.
+        # something touched per record. Hidden entirely for a non-admin
+        # account (see self.is_admin below, set once self.storage/
+        # self.current_username are known) -- Georgio asked this be
+        # restricted after the login system shipped, rather than open to
+        # every logged-in account.
         self.manage_users_btn = QPushButton("Manage Staff Accounts...")
         self.manage_users_btn.clicked.connect(self.open_manage_users)
         self.new_btn = QPushButton("New")
@@ -640,6 +656,15 @@ class NewIDLForm(QMainWindow):
         # that constructs NewIDLForm() directly without going through the
         # login flow.
         self.fields["Receipt.User"].setText(self.current_username or "")
+        # 2026-09-19 (later the same day): "Manage Staff Accounts..." is
+        # admin-only (see db/storage.py's is_admin column and this
+        # module's docstring) -- Georgio asked who should be able to
+        # add/remove staff after the login system shipped, since
+        # originally any logged-in account could. False (button hidden)
+        # for a not-logged-in construction too, same as current_username
+        # being None -- there's no meaningful "admin" without a login.
+        self.is_admin = bool(self.current_username) and bool(self.storage.is_admin(self.current_username))
+        self.manage_users_btn.setVisible(self.is_admin)
 
         # 2026-09-07: track which saved record (if any) the form currently
         # represents, and a snapshot of the last "known good" values to
@@ -1028,6 +1053,13 @@ class NewIDLForm(QMainWindow):
         PrinterSettingsDialog(parent=self).exec()
 
     def open_manage_users(self):
+        # The button itself is hidden for a non-admin (see __init__'s
+        # self.is_admin), but this guard is defense-in-depth against
+        # calling the method directly -- "Manage Staff Accounts..." must
+        # never open for a non-admin no matter how it's reached.
+        if not self.is_admin:
+            QMessageBox.warning(self, "Admins only", "Only an admin account can manage staff accounts.")
+            return
         ManageUsersDialog(self.storage, parent=self).exec()
 
     def print_to_printer(self):
