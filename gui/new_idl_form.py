@@ -58,6 +58,26 @@ layout" plus "make the words bigger and everything bigger". Two changes:
    and field/button padding across every field, label, button, and group
    box title on this screen, plus the window's default size grew to match
    — a blanket "everything bigger" change, not field-by-field tuning.
+
+2026-09-19 (same day, separate requests): two more changes, both about a
+real client's record turning out to have never been saved at all. First,
+_clone_record was added so a returning client's PRIOR record (found via
+"Find / Reprint Record..."'s search, e.g. by driving license number) can
+start a brand new IDL reusing their personal/original-document/receipt-
+payer details, without overwriting that old record — see
+gui/records_screen.py's "Clone as New Record" and _clone_record's own
+docstring. Second, once the missing-record report traced back to staff
+going straight from Autofill to Print without ever clicking Save: (a)
+"Issued Document.Number" stopped being auto-generated (it used to fill
+itself in with a fresh serial via Storage.next_issued_document_number()
+whenever left blank at save time) — per Georgio, an employee must always
+type this number in by hand, so a blank value is now a hard validation
+stop, the same way a blank Surname already was (see _persist_record); and
+(b) "Print" now persists the record itself (via that same _persist_record
+logic) before it sends anything to the printer, so the "forgot to click
+Save" failure mode can no longer happen via the Print path either — see
+print_to_printer's own docstring for why save-before-print (rather than
+after) was the deliberate choice.
 """
 
 import logging
@@ -577,28 +597,56 @@ class NewIDLForm(QMainWindow):
         edit.setText(value or "")
         edit.setStyleSheet(FLAG_STYLE if flagged else NORMAL_STYLE)
 
-    def save_record(self):
-        """Inserts a new record the first time this form saves, then
-        UPDATES that same row on every subsequent Save in this session
-        (see self.current_record_id) — including when the record being
-        edited was opened from the Records screen. Before this 2026-09-07
-        change, every Save was an INSERT, so re-saving an already-saved
-        record (the exact "staff notices a typo and fixes it" case the
-        Records screen exists for) would have silently created a
-        duplicate row instead of correcting the original.
+    def _persist_record(self) -> int | None:
+        """Validates, then inserts a new record the first time this form is
+        persisted, or UPDATES that same row on every subsequent persist in
+        this session (see self.current_record_id) — including when the
+        record being edited was opened from the Records screen. Before the
+        2026-09-07 change this is built on, every save was an INSERT, so
+        re-persisting an already-saved record (the exact "staff notices a
+        typo and fixes it" case the Records screen exists for) would have
+        silently created a duplicate row instead of correcting the
+        original.
+
+        This is the shared logic behind BOTH the "Save" button
+        (save_record, just below) and Print's auto-save (see
+        print_to_printer) — added 2026-09-19 after Georgio found a real
+        client's record was never saved at all, because staff had gone
+        straight from Autofill to Print without ever clicking Save.
+        Rather than trust that click to always happen, Print now persists
+        the record itself before it sends anything to the printer (see
+        print_to_printer for exactly where). Deliberately does NOT show a
+        "Saved" confirmation dialog itself — save_record adds that for the
+        Save button; print_to_printer's own "Sent to printer" message
+        already covers user feedback for the auto-save case, and showing
+        BOTH would mean two popups for one click.
+
+        Returns the saved record's id, or None if validation failed (in
+        which case nothing was written and a QMessageBox already explained
+        why — the caller should treat None as "stop, do not proceed").
 
         Also logs a full audit trail entry: which fields actually changed
         since the last known-good snapshot (self._save_baseline — either
         the values Autofill just produced, or the values this record had
         when it was opened for editing), not just "a save happened". See
         db/audit_log.log_record_saved."""
-        if not self.fields["Issued Document.Number"].text().strip():
-            self.fields["Issued Document.Number"].setText(self.storage.next_issued_document_number())
-
         values = {key: edit.text() for key, edit in self.fields.items()}
         if not values["Surname"].strip():
             QMessageBox.warning(self, "Missing data", "Surname is required before saving.")
-            return
+            return None
+        # 2026-09-19: Issued Document Number used to be auto-generated
+        # (self.storage.next_issued_document_number()) whenever this field
+        # was left blank at save time. Per Georgio, this number must always
+        # be entered manually by an employee — never invented by the app —
+        # so a blank value here is now a hard validation stop, the same
+        # way a blank Surname already was, rather than something silently
+        # filled in for them.
+        if not values["Issued Document.Number"].strip():
+            QMessageBox.warning(
+                self, "Missing data",
+                "Issued Document Number is required before saving — enter it manually.",
+            )
+            return None
 
         changed_fields: dict[str, tuple[str, str]] = {}
         if self._save_baseline is not None:
@@ -617,7 +665,18 @@ class NewIDLForm(QMainWindow):
 
         self._save_baseline = dict(values)
         log_record_saved(record_id, is_update, changed_fields)
+        return record_id
 
+    def save_record(self):
+        """The "Save" button's handler — see _persist_record for the
+        actual validate/insert/update logic (shared with Print's
+        auto-save). This wrapper just adds the "Saved" confirmation
+        dialog Save has always shown; print_to_printer calls
+        _persist_record directly and skips this dialog (see its own
+        docstring for why)."""
+        record_id = self._persist_record()
+        if record_id is None:
+            return  # validation failed; _persist_record already explained why
         QMessageBox.information(self, "Saved", f"IDL record #{record_id} saved.")
 
     def open_records_screen(self):
@@ -659,13 +718,15 @@ class NewIDLForm(QMainWindow):
         Every field carries over from the source record EXCEPT the three
         that describe THIS transaction rather than the client or their
         original document, which reset to the same defaults a genuinely
-        new record already gets: "Issued Document.Number" goes blank
-        (save_record's existing "generate one if blank" behavior then
-        assigns a fresh serial at Save time, same as any new record --
-        see save_record), "Issued Document.Date" resets to today, and
-        "Receipt.Date" goes blank (a new transaction's receipt hasn't
-        been dated yet). This matches LAA's own Clone behavior exactly,
-        confirmed against a real recording Georgio shared (2026-09-19).
+        new record already gets: "Issued Document.Number" goes blank —
+        an employee must type this transaction's own number in by hand
+        before Save/Print will proceed at all (see _persist_record's
+        validation; this field stopped being auto-generated 2026-09-19,
+        same day Clone was added) — "Issued Document.Date" resets to
+        today, and "Receipt.Date" goes blank (a new transaction's receipt
+        hasn't been dated yet). This matches LAA's own Clone behavior
+        exactly, confirmed against a real recording Georgio shared
+        (2026-09-19).
 
         self._receipt_received_from_auto is deliberately NOT set explicitly
         here to the cloned "Receipt.Received from" value (same as
@@ -756,7 +817,24 @@ class NewIDLForm(QMainWindow):
         in Printer Settings — no viewer window, no OS print dialog. See
         printing/print_dispatch.py's module docstring for the mechanism
         (SumatraPDF's silent CLI) and why this is deliberately a separate
-        action from Print Preview above."""
+        action from Print Preview above.
+
+        2026-09-19: also PERSISTS the record (via _persist_record, the
+        same insert/update logic "Save" uses) right before sending
+        anything to the printer — added after a real client's record
+        turned out to have never been saved at all, because staff went
+        straight from Autofill to Print without clicking Save. Save-first
+        (rather than save-after-printing-succeeds) is deliberate: if the
+        physical print then fails for an unrelated reason (printer
+        offline, a render error), the record is already safely in the
+        database and can be reprinted later from the Records screen,
+        rather than the data being lost again the exact same way. If
+        _persist_record's own validation fails (missing Surname or —
+        since that field stopped being auto-generated the same day, see
+        that method's docstring — a missing Issued Document Number), this
+        stops here and nothing is sent to the printer at all: a physical
+        booklet page should never get used for a record with no serial
+        number on file."""
         from db.audit_log import log_print_dispatch_failed, log_print_dispatched
         from printing.print_dispatch import print_pdf_to_printer
         from printing.print_page import render_idl_data_page
@@ -778,6 +856,9 @@ class NewIDLForm(QMainWindow):
         )
         if confirm != QMessageBox.Yes:
             return
+
+        if self._persist_record() is None:
+            return  # validation failed; _persist_record already explained why
 
         plain_values = {key: edit.text() for key, edit in self.fields.items()}
         APP_DATA_DIR.mkdir(parents=True, exist_ok=True)

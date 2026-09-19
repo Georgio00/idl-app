@@ -16,6 +16,17 @@ Regression tests for gui/new_idl_form.py's 2026-09-14 changes (on request):
      defeating the CGCV default on every single Autofill run. See
      NEVER_AUTOFILLED_FIELDS in new_idl_form.py.
 
+Also covers the 2026-09-19 "Clone as New Record" feature (CloneRecordTest)
+and _persist_record/PersistRecordTest -- added the same day after Georgio
+found a real client's record was never saved at all, because staff had
+gone straight from Autofill to Print without clicking Save. Two changes:
+Issued Document Number stopped being auto-generated (an employee must
+type it in by hand, and Save/Print now refuse to proceed while it's still
+blank, the same way a blank Surname already did), and Print now
+auto-saves the record itself (via the same _persist_record logic Save
+uses) before it sends anything to the printer, so the "forgot to click
+Save" failure mode can't happen via the Print path anymore either.
+
 These instantiate the REAL NewIDLForm widget (not a mock of it) against a
 real, isolated QApplication, run headless via QT_QPA_PLATFORM=offscreen --
 there is no display in this environment and none is needed to exercise
@@ -27,13 +38,16 @@ db/storage.py's import time, so patching db.storage.DEFAULT_DB_PATH after
 the fact would NOT reach that already-bound default -- the only way to
 keep these tests from touching a real machine's saved records is to
 replace the Storage class itself at the point new_idl_form.py imports it.
-Nothing here calls save/load, so a MagicMock is sufficient and avoids
-real file I/O entirely. RecordsScreen/PrinterSettingsDialog are never
+A MagicMock's methods (self.form.storage.save_record, .update_record) are
+enough to exercise _persist_record's own logic/validation without real
+file I/O; PersistRecordTest configures return_value where a test needs a
+specific record id back. RecordsScreen/PrinterSettingsDialog are never
 opened by these tests, so they need no similar treatment.
 """
 
 import os
 import sys
+import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
@@ -311,8 +325,10 @@ class CloneRecordTest(unittest.TestCase):
         self.assertEqual(self.form.fields["Receipt.Amount(LBP)"].text(), "5000000")
 
     def test_issued_document_number_resets_to_blank(self):
-        # Matches a genuinely new record: save_record() auto-generates a
-        # fresh serial for a blank Issued Document Number at Save time.
+        # Matches a genuinely new record: an employee must type THIS
+        # transaction's own number in by hand -- see PersistRecordTest,
+        # this is no longer auto-generated and Save/Print will refuse to
+        # proceed while it's still blank.
         self.assertEqual(self.form.fields["Issued Document.Number"].text(), "")
 
     def test_issued_document_date_resets_to_today(self):
@@ -378,6 +394,153 @@ class CloneRecordTest(unittest.TestCase):
         self.form.set_field("Surname", "KORDAHI", flagged=True)
         self.form._clone_record(7, dict(self.SOURCE_FIELDS))
         self.assertEqual(self.form.fields["Surname"].styleSheet(), NORMAL_STYLE)
+
+
+class PersistRecordTest(unittest.TestCase):
+    """Regression coverage for _persist_record (added 2026-09-19, see its
+    own docstring) -- the shared save logic behind both the "Save" button
+    and Print's new auto-save. Two real-world facts drove this: a client's
+    record was found to have never been saved at all (staff went straight
+    from Autofill to Print, never clicking Save), and separately, Georgio
+    wants Issued Document Number entered by an employee by hand, never
+    invented by the app -- so it changed from "auto-generate if blank" to
+    a hard validation stop, the same way a blank Surname already was."""
+
+    def setUp(self):
+        self.form = _make_form()
+        self.form.fields["Surname"].setText("KORDAHI")
+        self.form.fields["Issued Document.Number"].setText("344629")
+
+    def test_saves_successfully_when_surname_and_issued_number_are_present(self):
+        self.form.storage.save_record.return_value = 42
+        with mock.patch("gui.new_idl_form.QMessageBox"):
+            record_id = self.form._persist_record()
+        self.assertEqual(record_id, 42)
+        self.form.storage.save_record.assert_called_once()
+
+    def test_blocks_when_surname_is_missing(self):
+        self.form.fields["Surname"].setText("")
+        with mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            record_id = self.form._persist_record()
+        self.assertIsNone(record_id)
+        self.form.storage.save_record.assert_not_called()
+        mock_box.warning.assert_called_once()
+        self.assertIn("Surname", mock_box.warning.call_args.args[2])
+
+    def test_blocks_when_issued_document_number_is_missing(self):
+        # The core 2026-09-19 change: this field no longer fills itself
+        # in -- a blank value is now a hard stop, not a trigger to
+        # auto-generate one.
+        self.form.fields["Issued Document.Number"].setText("")
+        with mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            record_id = self.form._persist_record()
+        self.assertIsNone(record_id)
+        self.form.storage.save_record.assert_not_called()
+        mock_box.warning.assert_called_once()
+        self.assertIn("Issued Document Number", mock_box.warning.call_args.args[2])
+
+    def test_does_not_mutate_the_issued_document_number_field_at_all(self):
+        # Old behavior used to setText() a generated serial into this
+        # field as a side effect of saving -- confirms that's really gone,
+        # not just that saving no longer NEEDS to do it.
+        self.form._persist_record()
+        self.assertEqual(self.form.fields["Issued Document.Number"].text(), "344629")
+
+    def test_save_record_button_handler_shows_a_saved_dialog(self):
+        self.form.storage.save_record.return_value = 7
+        with mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.save_record()
+        mock_box.information.assert_called_once()
+        self.assertIn("7", mock_box.information.call_args.args[2])
+
+    def test_save_record_button_handler_shows_nothing_on_validation_failure(self):
+        self.form.fields["Issued Document.Number"].setText("")
+        with mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.save_record()
+        mock_box.information.assert_not_called()  # only the warning fired
+        mock_box.warning.assert_called_once()
+
+    def test_second_persist_updates_rather_than_inserts(self):
+        self.form.storage.save_record.return_value = 9
+        self.form._persist_record()  # first save: insert
+        self.form._persist_record()  # second save on the same record: update
+        self.form.storage.save_record.assert_called_once()
+        self.form.storage.update_record.assert_called_once()
+        args = self.form.storage.update_record.call_args.args
+        self.assertEqual(args[0], 9)  # updates the id the first save returned
+
+
+class PrintAutoSaveTest(unittest.TestCase):
+    """Regression coverage for print_to_printer's 2026-09-19 auto-save
+    (see its own docstring): clicking "Print" now persists the record via
+    _persist_record BEFORE anything is sent to the printer, so a client's
+    IDL can no longer go out physically printed with nothing saved to the
+    database at all -- the exact real failure this whole change addresses.
+    """
+
+    def setUp(self):
+        self.form = _make_form()
+        self.form.fields["Surname"].setText("KORDAHI")
+        self.form.fields["Issued Document.Number"].setText("344629")
+        self.tmp_dir = Path(tempfile.mkdtemp())
+
+    def _confirm_yes_patch(self, mock_box):
+        # QMessageBox itself is mocked out, so QMessageBox.Yes inside
+        # print_to_printer resolves to the mock's own auto-created
+        # attribute -- .question must be told to return that exact
+        # object back for "confirm != QMessageBox.Yes" to read as "yes".
+        mock_box.question.return_value = mock_box.Yes
+
+    def test_print_persists_the_record_before_dispatching(self):
+        self.form.storage.save_record.return_value = 5
+        with mock.patch("gui.new_idl_form.QMessageBox") as mock_box, \
+             mock.patch("gui.new_idl_form.get_configured_printer_name", return_value="Office Printer"), \
+             mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.print_page.render_idl_data_page") as mock_render, \
+             mock.patch("printing.print_dispatch.print_pdf_to_printer") as mock_print, \
+             mock.patch("db.audit_log.log_print_dispatched"), \
+             mock.patch("db.audit_log.log_print_dispatch_failed"):
+            self._confirm_yes_patch(mock_box)
+            self.form.print_to_printer()
+
+        self.form.storage.save_record.assert_called_once()
+        mock_render.assert_called_once()
+        mock_print.assert_called_once()
+
+    def test_print_does_not_dispatch_when_issued_document_number_is_missing(self):
+        # The real scenario this whole feature addresses: Print must not
+        # be able to silently skip past a record with nothing to save.
+        self.form.fields["Issued Document.Number"].setText("")
+        with mock.patch("gui.new_idl_form.QMessageBox") as mock_box, \
+             mock.patch("gui.new_idl_form.get_configured_printer_name", return_value="Office Printer"), \
+             mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.print_page.render_idl_data_page") as mock_render, \
+             mock.patch("printing.print_dispatch.print_pdf_to_printer") as mock_print:
+            self._confirm_yes_patch(mock_box)
+            self.form.print_to_printer()
+
+        self.form.storage.save_record.assert_not_called()
+        mock_render.assert_not_called()
+        mock_print.assert_not_called()
+
+    def test_print_still_requires_a_configured_printer_before_anything_else(self):
+        # No printer configured must stop things before even the confirm
+        # dialog -- and, notably, before persisting -- same as before this
+        # change (nothing about auto-save should short-circuit this check).
+        with mock.patch("gui.new_idl_form.QMessageBox") as mock_box, \
+             mock.patch("gui.new_idl_form.get_configured_printer_name", return_value=""):
+            self.form.print_to_printer()
+
+        self.form.storage.save_record.assert_not_called()
+        mock_box.question.assert_not_called()
+
+    def test_declining_the_confirm_dialog_does_not_persist(self):
+        with mock.patch("gui.new_idl_form.QMessageBox") as mock_box, \
+             mock.patch("gui.new_idl_form.get_configured_printer_name", return_value="Office Printer"):
+            mock_box.question.return_value = mock_box.No
+            self.form.print_to_printer()
+
+        self.form.storage.save_record.assert_not_called()
 
 
 if __name__ == "__main__":
