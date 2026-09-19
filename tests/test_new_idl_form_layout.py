@@ -9,7 +9,9 @@ These check the two structural things a visual screenshot review can't
 pin down for the future: that Number/Date and Amount(LBP)/Date really do
 share a grid row (not just look close together by coincidence of spacing),
 and that the bigger-text stylesheet is actually wired onto the window
-(not just present as an unused module constant). Run headless via
+(not just present as an unused module constant). Also covers the same
+day's later "also add branch and name" request: Receipt.Branch/
+Receipt.User are paired on their own row the same way. Run headless via
 QT_QPA_PLATFORM=offscreen, same as tests/test_new_idl_form.py -- see that
 file's own docstring for why Storage is mocked and QMessageBox isn't
 needed here (nothing in these tests triggers one).
@@ -90,6 +92,19 @@ class PairedRowLayoutTest(unittest.TestCase):
         received_from_row = _grid_row(self.form.fields["Receipt.Received from"])
         amount_row = _grid_row(self.form.fields["Receipt.Amount(LBP)"])
         self.assertNotEqual(received_from_row, amount_row)
+
+    def test_receipt_branch_and_user_share_a_row(self):
+        # 2026-09-19 ("also add branch and name"): LAA's own screen shows
+        # these two at the bottom of the Receipt group -- paired here the
+        # same way Number/Date and Amount/Date already are.
+        branch = self.form.fields["Receipt.Branch"]
+        user = self.form.fields["Receipt.User"]
+        self.assertEqual(_grid_row(branch), _grid_row(user))
+
+    def test_receipt_branch_user_row_is_distinct_from_amount_date_row(self):
+        branch_row = _grid_row(self.form.fields["Receipt.Branch"])
+        amount_row = _grid_row(self.form.fields["Receipt.Amount(LBP)"])
+        self.assertNotEqual(branch_row, amount_row)
 
     def test_personal_details_fields_are_not_on_a_grid_at_all(self):
         # Personal details deliberately stayed a plain QFormLayout (one

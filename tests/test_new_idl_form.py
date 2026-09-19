@@ -27,6 +27,13 @@ auto-saves the record itself (via the same _persist_record logic Save
 uses) before it sends anything to the printer, so the "forgot to click
 Save" failure mode can't happen via the Print path anymore either.
 
+Also covers two more 2026-09-19 additions, both from a second video
+Georgio shared of LAA's own toolbar: "◀ Previous"/"Next ▶" record
+navigation (NavigateRecordsTest, see _go_to_relative_record) and, from
+the follow-up request "also add branch and name", the new
+Receipt.Branch/Receipt.User fields (see the extra CloneRecordTest cases
+below for how they carry over on Clone differently from each other).
+
 These instantiate the REAL NewIDLForm widget (not a mock of it) against a
 real, isolated QApplication, run headless via QT_QPA_PLATFORM=offscreen --
 there is no display in this environment and none is needed to exercise
@@ -67,7 +74,12 @@ _app = QApplication.instance() or QApplication([])
 with mock.patch("gui.new_idl_form.Storage"):
     from gui.new_idl_form import DEFAULT_PLACE_OF_ISSUE, NEVER_AUTOFILLED_FIELDS, NORMAL_STYLE, NewIDLForm
 
+from db.storage import IdlRecord
 from ocr.pipeline import AutofillResult, FormField
+
+
+def _record(record_id: int, **fields: str) -> IdlRecord:
+    return IdlRecord(id=record_id, created_at="2026-09-19T10:00:00", fields=fields)
 
 
 def _make_form() -> NewIDLForm:
@@ -92,7 +104,7 @@ class PersonalFieldsTrimmedTest(unittest.TestCase):
             self.assertIn(f"Original Document.{label}", self.form.fields)
         for label in ("Number", "Date", "Signature"):
             self.assertIn(f"Issued Document.{label}", self.form.fields)
-        for label in ("Received from", "Date", "Amount(LBP)"):
+        for label in ("Received from", "Date", "Amount(LBP)", "Branch", "User"):
             self.assertIn(f"Receipt.{label}", self.form.fields)
 
 
@@ -301,7 +313,7 @@ class CloneRecordTest(unittest.TestCase):
         "Original Document.Expiry Date": "18/11/2031",
         "Issued Document.Number": "344629", "Issued Document.Date": "10/09/2026",
         "Receipt.Received from": "KARIM KORDAHI", "Receipt.Amount(LBP)": "5000000",
-        "Receipt.Date": "10/09/2026",
+        "Receipt.Date": "10/09/2026", "Receipt.Branch": "SIN EL FIL", "Receipt.User": "ROULA",
     }
 
     def setUp(self):
@@ -337,6 +349,17 @@ class CloneRecordTest(unittest.TestCase):
 
     def test_receipt_date_resets_to_blank(self):
         self.assertEqual(self.form.fields["Receipt.Date"].text(), "")
+
+    def test_receipt_branch_carries_over(self):
+        # Same office, transaction to transaction -- same reasoning as
+        # Original Document.Place of Issue's DEFAULT_PLACE_OF_ISSUE.
+        self.assertEqual(self.form.fields["Receipt.Branch"].text(), "SIN EL FIL")
+
+    def test_receipt_user_resets_to_blank(self):
+        # Whoever handled the client's earlier visit isn't necessarily
+        # who's handling this new one -- unlike Branch, this must NOT
+        # carry over from the source record.
+        self.assertEqual(self.form.fields["Receipt.User"].text(), "")
 
     def test_current_record_id_stays_none_so_save_inserts_not_updates(self):
         # The core safety property: Save after a Clone must INSERT a new
@@ -394,6 +417,94 @@ class CloneRecordTest(unittest.TestCase):
         self.form.set_field("Surname", "KORDAHI", flagged=True)
         self.form._clone_record(7, dict(self.SOURCE_FIELDS))
         self.assertEqual(self.form.fields["Surname"].styleSheet(), NORMAL_STYLE)
+
+
+class NavigateRecordsTest(unittest.TestCase):
+    """Regression coverage for "◀ Previous"/"Next ▶" (added 2026-09-19,
+    see _go_to_relative_record's own docstring) -- steps straight from one
+    saved record to the next/previous, matching a real recording of LAA's
+    own equivalent toolbar arrows Georgio shared. self.form.storage is a
+    MagicMock (see this module's docstring), so list_records() must be
+    given an explicit return_value per test -- records are ordered lowest
+    id first (oldest/first-saved), same as _go_to_relative_record sorts
+    them, so id=1 is "first" and id=3 is "last" throughout."""
+
+    def setUp(self):
+        self.form = _make_form()
+        # list_records() itself returns newest-first (id DESC) in the real
+        # Storage -- deliberately returned in THAT order here too, so a
+        # test that only reorders and never re-sorts wouldn't silently
+        # pass for the wrong reason.
+        self.records = [
+            _record(3, Surname="THIRD"), _record(2, Surname="SECOND"), _record(1, Surname="FIRST"),
+        ]
+        self.form.storage.list_records.return_value = self.records
+
+    def test_no_saved_records_shows_a_message_and_loads_nothing(self):
+        self.form.storage.list_records.return_value = []
+        with mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.go_to_next_record()
+        mock_box.information.assert_called_once()
+        self.assertIsNone(self.form.current_record_id)
+
+    def test_next_with_nothing_loaded_starts_at_the_first_record(self):
+        self.form.go_to_next_record()
+        self.assertEqual(self.form.current_record_id, 1)
+        self.assertEqual(self.form.fields["Surname"].text(), "FIRST")
+
+    def test_previous_with_nothing_loaded_starts_at_the_last_record(self):
+        self.form.go_to_previous_record()
+        self.assertEqual(self.form.current_record_id, 3)
+        self.assertEqual(self.form.fields["Surname"].text(), "THIRD")
+
+    def test_next_moves_to_the_next_higher_id(self):
+        self.form._load_record(1, {"Surname": "FIRST"})
+        self.form.go_to_next_record()
+        self.assertEqual(self.form.current_record_id, 2)
+        self.assertEqual(self.form.fields["Surname"].text(), "SECOND")
+
+    def test_previous_moves_to_the_next_lower_id(self):
+        self.form._load_record(3, {"Surname": "THIRD"})
+        self.form.go_to_previous_record()
+        self.assertEqual(self.form.current_record_id, 2)
+        self.assertEqual(self.form.fields["Surname"].text(), "SECOND")
+
+    def test_next_at_the_last_record_shows_a_message_and_does_not_move(self):
+        self.form._load_record(3, {"Surname": "THIRD"})
+        with mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.go_to_next_record()
+        mock_box.information.assert_called_once()
+        self.assertEqual(self.form.current_record_id, 3)
+        self.assertEqual(self.form.fields["Surname"].text(), "THIRD")
+
+    def test_previous_at_the_first_record_shows_a_message_and_does_not_move(self):
+        self.form._load_record(1, {"Surname": "FIRST"})
+        with mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.go_to_previous_record()
+        mock_box.information.assert_called_once()
+        self.assertEqual(self.form.current_record_id, 1)
+        self.assertEqual(self.form.fields["Surname"].text(), "FIRST")
+
+    def test_current_record_deleted_elsewhere_falls_back_to_the_first_record(self):
+        # current_record_id=99 no longer exists in list_records() (e.g.
+        # deleted from the Records screen in the meantime) -- rather than
+        # crash on a ValueError from list.index(), falls back the same
+        # way "nothing loaded" already does.
+        self.form.current_record_id = 99
+        self.form.go_to_next_record()
+        self.assertEqual(self.form.current_record_id, 1)
+
+    def test_navigating_switches_into_editing_mode_like_open_for_edit(self):
+        # Reuses _load_record -- Save from here on must UPDATE the loaded
+        # record, not insert a new one, same as opening it from the
+        # Records screen would.
+        self.form.go_to_next_record()
+        self.assertIn("Editing IDL Record #1", self.form.title_label.text())
+
+    def test_re_reads_storage_fresh_on_every_call_rather_than_caching(self):
+        self.form.go_to_next_record()
+        self.form.go_to_next_record()
+        self.assertEqual(self.form.storage.list_records.call_count, 2)
 
 
 class PersistRecordTest(unittest.TestCase):

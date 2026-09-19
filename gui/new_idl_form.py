@@ -78,6 +78,35 @@ logic) before it sends anything to the printer, so the "forgot to click
 Save" failure mode can no longer happen via the Print path either — see
 print_to_printer's own docstring for why save-before-print (rather than
 after) was the deliberate choice.
+
+2026-09-19 (a third, separate request the same day): Georgio shared a
+video of LAA's own "◀ ▶" toolbar arrows, which step straight from one
+saved record to the next/previous one — no Search dialog, no re-typing a
+driving license number each time. Added "◀ Previous"/"Next ▶" buttons
+next to "Find / Reprint Record..." (see _go_to_relative_record) that do
+the same thing here: they load the previous/next record (ordered by id,
+i.e. save order) straight into the form via the same _load_record path
+"Open for Edit" already uses. Deliberately does NOT warn about unsaved
+changes first — nothing else on this form does either (New, Open for
+Edit, and Clone all overwrite the form's current contents outright), so
+Previous/Next stays consistent with that rather than being the one
+button that suddenly asks.
+
+2026-09-19 (same video, same request — "also add branch and name"): that
+same LAA recording shows every record's Receipt group ending with
+"Branch: <office>" / "User: <staff name>", which this screen had no
+fields for at all. Added "Receipt.Branch" and "Receipt.User" as a paired
+row (see _add_paired_row) under Amount(LBP)/Date, matching where LAA
+shows them. Both are plain manually-typed text, same as Phone/Email/
+Signature — Autofill never touches them and Save/Print don't require
+them. They carry over differently on Clone (see _clone_record): Branch
+describes the office, which stays the same transaction to transaction —
+Georgio has already established that pattern for
+Original Document.Place of Issue (DEFAULT_PLACE_OF_ISSUE) — so it's left
+alone by Clone's copy loop; User describes who's handling THIS
+transaction, which a new client visit shouldn't assume carries over from
+whoever handled the source record, so Clone resets it blank the same way
+it resets Issued Document.Number.
 """
 
 import logging
@@ -265,6 +294,18 @@ class NewIDLForm(QMainWindow):
         top_bar = QHBoxLayout()
         self.records_btn = QPushButton("Find / Reprint Record...")
         self.records_btn.clicked.connect(self.open_records_screen)
+        # 2026-09-19: "◀ Previous"/"Next ▶" — step straight to the
+        # previous/next saved record without opening the Search dialog,
+        # matching LAA's own toolbar arrows (see this module's docstring
+        # and _go_to_relative_record). Grouped right next to
+        # "Find / Reprint Record..." since both are "browse the saved
+        # records" actions.
+        self.prev_record_btn = QPushButton("◀ Previous")
+        self.prev_record_btn.setToolTip("Load the previous saved record.")
+        self.prev_record_btn.clicked.connect(self.go_to_previous_record)
+        self.next_record_btn = QPushButton("Next ▶")
+        self.next_record_btn.setToolTip("Load the next saved record.")
+        self.next_record_btn.clicked.connect(self.go_to_next_record)
         self.printer_settings_btn = QPushButton("Printer Settings...")
         self.printer_settings_btn.clicked.connect(self.open_printer_settings)
         self.new_btn = QPushButton("New")
@@ -278,6 +319,8 @@ class NewIDLForm(QMainWindow):
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.close)
         top_bar.addWidget(self.records_btn)
+        top_bar.addWidget(self.prev_record_btn)
+        top_bar.addWidget(self.next_record_btn)
         top_bar.addWidget(self.printer_settings_btn)
         top_bar.addStretch()
         top_bar.addWidget(self.new_btn)
@@ -412,6 +455,11 @@ class NewIDLForm(QMainWindow):
         receipt_grid = QGridLayout()
         _add_full_row(receipt_grid, 0, "Received from", "Receipt.Received from")
         _add_paired_row(receipt_grid, 1, "Amount(LBP)", "Receipt.Amount(LBP)", "Date", "Receipt.Date")
+        # 2026-09-19: "Branch"/"User" -- LAA's own screen shows both at the
+        # bottom of this same group (see this module's docstring). Plain
+        # manually-typed text, same treatment as Phone/Email/Signature:
+        # never touched by Autofill, never required to Save/Print.
+        _add_paired_row(receipt_grid, 2, "Branch", "Receipt.Branch", "User", "Receipt.User")
         _set_value_column_stretch(receipt_grid)
         receipt_box.setLayout(receipt_grid)
         left_column.addWidget(receipt_box)
@@ -702,6 +750,71 @@ class NewIDLForm(QMainWindow):
         self.title_label.setText(f"Editing IDL Record #{record_id}")
         log_record_opened(record_id)
 
+    def go_to_previous_record(self):
+        self._go_to_relative_record(-1)
+
+    def go_to_next_record(self):
+        self._go_to_relative_record(1)
+
+    def _go_to_relative_record(self, step: int):
+        """Shared handler behind "◀ Previous"/"Next ▶" (see this module's
+        docstring for the real-world motivation: LAA's own equivalent
+        toolbar arrows, which browse straight from one saved record to the
+        next/previous without going through Search each time). Records are
+        ordered by id (i.e. save order, oldest first) — self.storage's own
+        list_records() returns newest-first, so that's reversed here first.
+
+        Re-reads the record list from storage on every call rather than
+        caching it, so a record saved or deleted in a different session
+        (or via Delete on the Records screen) is always reflected — the
+        same "just re-query, this app's scale doesn't need caching"
+        approach db/storage.py's own docstring already takes for
+        list_records() itself.
+
+        With nothing currently loaded (self.current_record_id is None —
+        a brand new, never-saved record, or right after "New"), Next
+        starts browsing from the very first saved record and Previous
+        from the very last one, rather than doing nothing. At either end
+        of the list, or when there are no saved records at all, shows an
+        informational message and leaves the form exactly as it was —
+        same "nothing to act on" treatment gui/records_screen.py's own
+        "Select a record first" message already uses for an empty
+        selection, rather than silently no-op'ing.
+
+        Deliberately reuses _load_record for the actual field population
+        (see that method) — landing on a record via Previous/Next is the
+        same "now editing this existing row" state as opening it from the
+        Records screen, so Save from here on correctly UPDATEs it instead
+        of inserting a new one."""
+        records = sorted(self.storage.list_records(), key=lambda r: r.id)
+        if not records:
+            QMessageBox.information(self, "No records", "No saved records yet.")
+            return
+
+        ids = [r.id for r in records]
+        if self.current_record_id is None:
+            index = 0 if step > 0 else len(ids) - 1
+        else:
+            try:
+                current_index = ids.index(self.current_record_id)
+            except ValueError:
+                # The record currently on screen no longer exists in
+                # storage (e.g. deleted elsewhere since it was loaded) --
+                # fall back to the same start/end Next/Previous already
+                # use for "nothing loaded" rather than crashing.
+                index = 0 if step > 0 else len(ids) - 1
+            else:
+                index = current_index + step
+                if index < 0:
+                    QMessageBox.information(self, "Start of list", "This is the first saved record.")
+                    return
+                if index >= len(ids):
+                    QMessageBox.information(self, "End of list", "This is the last saved record.")
+                    return
+
+        target = records[index]
+        self._load_record(target.id, target.fields)
+
     def _clone_record(self, source_record_id: int, fields: dict):
         """Starts a brand new, unsaved IDL record prefilled from a
         previously saved one (see gui/records_screen.py's "Clone as New
@@ -715,7 +828,7 @@ class NewIDLForm(QMainWindow):
         silently overwrite the client's earlier visit instead of creating
         a record for this new one.
 
-        Every field carries over from the source record EXCEPT the three
+        Every field carries over from the source record EXCEPT the ones
         that describe THIS transaction rather than the client or their
         original document, which reset to the same defaults a genuinely
         new record already gets: "Issued Document.Number" goes blank —
@@ -723,10 +836,15 @@ class NewIDLForm(QMainWindow):
         before Save/Print will proceed at all (see _persist_record's
         validation; this field stopped being auto-generated 2026-09-19,
         same day Clone was added) — "Issued Document.Date" resets to
-        today, and "Receipt.Date" goes blank (a new transaction's receipt
-        hasn't been dated yet). This matches LAA's own Clone behavior
-        exactly, confirmed against a real recording Georgio shared
-        (2026-09-19).
+        today, "Receipt.Date" goes blank (a new transaction's receipt
+        hasn't been dated yet), and "Receipt.User" goes blank (whoever
+        handled the client's earlier visit isn't necessarily who's
+        handling this new one, so it isn't assumed). "Receipt.Branch"
+        deliberately is NOT reset — same office, transaction to
+        transaction, same reasoning as DEFAULT_PLACE_OF_ISSUE — so it
+        carries over from the source record like any other client detail.
+        This matches LAA's own Clone behavior exactly, confirmed against a
+        real recording Georgio shared (2026-09-19).
 
         self._receipt_received_from_auto is deliberately NOT set explicitly
         here to the cloned "Receipt.Received from" value (same as
@@ -758,6 +876,7 @@ class NewIDLForm(QMainWindow):
         self.fields["Issued Document.Number"].setText("")
         self.fields["Issued Document.Date"].setText(date.today().strftime("%d/%m/%Y"))
         self.fields["Receipt.Date"].setText("")
+        self.fields["Receipt.User"].setText("")
 
         self.current_record_id = None
         self._save_baseline = None
