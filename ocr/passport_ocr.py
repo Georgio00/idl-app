@@ -248,6 +248,28 @@ might have MRZ text Vision can't read sideways even though this one's
 was fine), but the bio-page fix above is what a real retest on this exact
 photo actually needed.
 
+2026-09-19: the very same Younes Hamzeh photo referenced above (the "ace of
+EL BATROUN" fix) resurfaced with a different symptom once that fix held:
+Place of B. came back as "EL BATROUN 26:07 2022" -- the correct place, plus
+some other printed date on the bio page trailing after it (the real date of
+birth is read separately and correctly off the MRZ as 03/02/1956, so this
+wasn't that -- most likely the issuance or expiry date, unlabeled in the
+value band because its own label line either wasn't read by Vision at all
+or fell outside the band). Root cause: this trailing line contains no
+substring or fuzzy suffix match against any _KNOWN_LABEL_KEYWORDS entry
+(it's just digits, a colon, and a space), so _is_label_like_line returned
+False for it and _select_value_lines happily kept it as this field's own
+second value line, under the _MAX_VALUE_LINES cap, and _field_read_from_
+lines joined both lines with a space. Fixed with a new, purely-structural
+check rather than another keyword: _is_date_like_line flags a clustered
+line as not-a-value whenever it contains no letters at all (only digits and
+date/time punctuation). Every field these selection helpers currently serve
+-- place of birth, father's name -- is inherently textual, so a legitimate
+second value line for either always contains at least one letter; a line
+that's pure digits/punctuation is never that, regardless of which date or
+number format produced it, which generalizes past this one photo's exact
+"26:07 2022" shape.
+
 2026-09-06 (a third pass, same day -- a real retest on a DIFFERENT rotated
 photo showed the second fix still wasn't right): a ninth real photo
 (Charbel Sfeir) was also rotated ~90 degrees, and Place of B. still came
@@ -835,16 +857,41 @@ def _is_label_like_line(line: list[OcrWord]) -> bool:
     return False
 
 
+# Matches a clustered line made up of nothing but digits and date/time
+# punctuation (colons, slashes, dashes, dots) and whitespace — see
+# _is_date_like_line and this module's 2026-09-19 docstring note.
+_DATE_LIKE_LINE_RE = re.compile(r"^[\d\s:/.\-]+$")
+
+
+def _is_date_like_line(line: list[OcrWord]) -> bool:
+    """True when a clustered line has no letters at all — just digits and
+    date/time punctuation, e.g. "26:07 2022" or "03/02/1956". Added
+    2026-09-19 (see this module's docstring) after a real photo (Younes
+    Hamzeh) showed an unlabeled printed date on the bio page get absorbed
+    as a second value line for "Place of birth", producing "EL BATROUN
+    26:07 2022" — that line doesn't contain any _KNOWN_LABEL_KEYWORDS
+    substring, so _is_label_like_line alone doesn't stop line-selection
+    before it. Every field _select_value_lines/_select_value_lines_skip_
+    leading_label currently serve (place of birth, father's name) is
+    inherently textual, so a legitimate value line for either always
+    contains at least one letter — a purely numeric/punctuation line is
+    never this field's own content, whatever date or number produced it."""
+    text = "".join(w.text for w in line)
+    return bool(text) and bool(_DATE_LIKE_LINE_RE.match(text))
+
+
 def _select_value_lines(lines: list[list[OcrWord]]) -> list[list[OcrWord]]:
-    """Keeps clustered lines top-to-bottom until either _MAX_VALUE_LINES is
-    reached or a line that looks like another field's label is hit (see
-    _is_label_like_line) — whichever comes first. Replaces a blind
-    `[:_MAX_VALUE_LINES]` slice, which had no way to tell "the next field's
-    label happened to land inside the generous band" apart from "this
-    field's own second value line" and would happily keep the former."""
+    """Keeps clustered lines top-to-bottom until _MAX_VALUE_LINES is
+    reached, or a line that looks like another field's label (see
+    _is_label_like_line) or a stray unlabeled date (see _is_date_like_line)
+    is hit — whichever comes first. Replaces a blind `[:_MAX_VALUE_LINES]`
+    slice, which had no way to tell "something that isn't actually this
+    field's own value happened to land inside the generous band" apart
+    from "this field's own second value line" and would happily keep the
+    former."""
     selected: list[list[OcrWord]] = []
     for line in lines:
-        if _is_label_like_line(line):
+        if _is_label_like_line(line) or _is_date_like_line(line):
             break
         selected.append(line)
         if len(selected) >= _MAX_VALUE_LINES:
@@ -862,15 +909,15 @@ def _select_value_lines_skip_leading_label(lines: list[list[OcrWord]]) -> list[l
     _select_value_lines can't tell those apart since it always treats the
     very first label-like line it sees as a stop signal. Once a real
     (non-label) line has been seen, behaves exactly like _select_value_lines
-    again: a label-like line past that point is the next field's, not
-    this one's, so it's still a stop signal."""
+    again: a label-like line, or a stray unlabeled date-like line, past
+    that point stops selection rather than being absorbed."""
     selected: list[list[OcrWord]] = []
     for line in lines:
         is_label = _is_label_like_line(line)
         if not selected:
             if is_label:
                 continue
-        elif is_label:
+        elif is_label or _is_date_like_line(line):
             break
         selected.append(line)
         if len(selected) >= _MAX_VALUE_LINES:
