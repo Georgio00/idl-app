@@ -137,6 +137,12 @@ defense-in-depth. The very first account (LoginDialog's bootstrap mode)
 is always created as an admin, and db/storage.py refuses to demote or
 delete the LAST remaining admin -- either would leave the app with no
 account able to ever manage staff again.
+
+2026-09-19 (later still, on request): removed the top bar's "Cancel"
+button -- it only ever called self.close(), which is exactly what the
+window's own titlebar X button already does (same no-confirmation,
+no-unsaved-changes-check behavior either way), so it was pure
+duplication rather than a distinct action.
 """
 
 import logging
@@ -342,7 +348,13 @@ class NewIDLForm(QMainWindow):
         central.setStyleSheet(BASE_STYLESHEET)
         outer = QVBoxLayout(central)
 
-        # --- Top bar: save/cancel, matching LAA's Save/Cancel row
+        # --- Top bar
+        # 2026-09-19 (later the same day, on request): removed "Cancel" --
+        # it only ever called self.close(), the exact same thing the
+        # window's own titlebar X button already does (no confirmation,
+        # no unsaved-changes check, either way) -- confirmed with Georgio
+        # this was pure duplication, not a button doing anything Cancel-
+        # specific, before removing it.
         # 2026-09-07: added "Find / Reprint Record..." and "New" — the app
         # used to have no way back to a record once Save was clicked (see
         # gui/records_screen.py's docstring). "New" resets the form back to
@@ -394,8 +406,6 @@ class NewIDLForm(QMainWindow):
         self.print_preview_btn.clicked.connect(self.print_preview)
         self.print_btn = QPushButton("Print")
         self.print_btn.clicked.connect(self.print_to_printer)
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self.close)
         top_bar.addWidget(self.records_btn)
         top_bar.addWidget(self.prev_record_btn)
         top_bar.addWidget(self.next_record_btn)
@@ -406,7 +416,6 @@ class NewIDLForm(QMainWindow):
         top_bar.addWidget(self.save_btn)
         top_bar.addWidget(self.print_preview_btn)
         top_bar.addWidget(self.print_btn)
-        top_bar.addWidget(self.cancel_btn)
         outer.addLayout(top_bar)
 
         self.title_label = QLabel("Creating New IDL")
