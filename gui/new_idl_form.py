@@ -76,8 +76,8 @@ from PySide6.QtWidgets import (
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db.audit_log import (
     configure_audit_logging, log_app_start, log_autofill_failed, log_autofill_run,
-    log_record_opened, log_record_saved, log_update_applied, log_update_available,
-    log_update_declined, log_update_failed,
+    log_record_cloned, log_record_opened, log_record_saved, log_update_applied,
+    log_update_available, log_update_declined, log_update_failed,
 )
 from db.storage import APP_DATA_DIR, Storage
 from gui.image_upload_box import ImageUploadBox
@@ -623,6 +623,7 @@ class NewIDLForm(QMainWindow):
     def open_records_screen(self):
         dialog = RecordsScreen(self.storage, parent=self)
         dialog.record_opened.connect(self._load_record)
+        dialog.record_cloned.connect(self._clone_record)
         dialog.exec()
 
     def _load_record(self, record_id: int, fields: dict):
@@ -641,6 +642,66 @@ class NewIDLForm(QMainWindow):
         self._save_baseline = dict(fields)
         self.title_label.setText(f"Editing IDL Record #{record_id}")
         log_record_opened(record_id)
+
+    def _clone_record(self, source_record_id: int, fields: dict):
+        """Starts a brand new, unsaved IDL record prefilled from a
+        previously saved one (see gui/records_screen.py's "Clone as New
+        Record" and its module docstring for the real-world motivation: a
+        returning client's driving license number is searched, then this
+        reuses their already-known personal/original-document/receipt-
+        payer details instead of retyping them). Deliberately NOT the same
+        as _load_record: this must end up in a "new, unsaved record" state
+        (self.current_record_id stays None, so Save INSERTs a new row
+        rather than updating source_record_id) -- otherwise Save would
+        silently overwrite the client's earlier visit instead of creating
+        a record for this new one.
+
+        Every field carries over from the source record EXCEPT the three
+        that describe THIS transaction rather than the client or their
+        original document, which reset to the same defaults a genuinely
+        new record already gets: "Issued Document.Number" goes blank
+        (save_record's existing "generate one if blank" behavior then
+        assigns a fresh serial at Save time, same as any new record --
+        see save_record), "Issued Document.Date" resets to today, and
+        "Receipt.Date" goes blank (a new transaction's receipt hasn't
+        been dated yet). This matches LAA's own Clone behavior exactly,
+        confirmed against a real recording Georgio shared (2026-09-19).
+
+        self._receipt_received_from_auto is deliberately NOT set explicitly
+        here to the cloned "Receipt.Received from" value (same as
+        _load_record already does) -- but because this loop sets every
+        field via setText() in self.fields' insertion order (Surname/First
+        Name land before Receipt.Received from), _sync_received_from_name
+        actually runs mid-loop off Surname/First Name's own textChanged
+        signal and provisionally recomputes Receipt.Received from *before*
+        this method's own explicit setText() for that field overwrites it
+        with the real cloned value a few iterations later. The practical
+        effect (see tests/test_new_idl_form.py::CloneRecordTest): when the
+        cloned value already equals "{First Name} {Surname}" (the common
+        case -- the applicant received their own document), the tracker
+        ends up matching it too, so the field keeps live-syncing correctly
+        if staff later fix a name typo on the clone. When the source
+        record's Received From was a genuine manual override (someone
+        else picked up/paid, e.g. "PAID BY COMPANY XYZ"), that value can
+        never equal the loop's Surname/First-Name-derived intermediate
+        value, so the tracker ends up stale/mismatched and the override
+        survives a later Surname/First Name edit untouched -- same
+        protection _load_record already relies on for exactly this
+        reason."""
+        for key, edit in self.fields.items():
+            edit.setText(fields.get(key, ""))
+            edit.setStyleSheet(NORMAL_STYLE)
+        for box in (self.passport_box, self.license_front_box, self.license_back_box):
+            box.clear_image()
+
+        self.fields["Issued Document.Number"].setText("")
+        self.fields["Issued Document.Date"].setText(date.today().strftime("%d/%m/%Y"))
+        self.fields["Receipt.Date"].setText("")
+
+        self.current_record_id = None
+        self._save_baseline = None
+        self.title_label.setText(f"Creating New IDL (cloned from record #{source_record_id})")
+        log_record_cloned(source_record_id)
 
     def reset_to_new_record(self):
         """Clears the form back to a blank, insert-a-new-record state.

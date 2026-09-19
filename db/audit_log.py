@@ -173,6 +173,21 @@ def log_record_opened(record_id: int) -> None:
     _logger.info(_kv({"event": "record_opened", "user": _user(), "record_id": record_id}))
 
 
+def log_record_cloned(source_record_id: int) -> None:
+    """2026-09-19: "Clone as New Record" (see gui/records_screen.py and
+    gui/new_idl_form.py's _clone_record) -- a returning client's prior
+    record is reused to start a brand new IDL (fresh Issued Document
+    Number/Date, new row on Save) rather than editing the old one. Only
+    records WHICH record this new one was cloned from; the resulting
+    save itself still gets its own ordinary record_saved/insert event
+    (see log_record_saved) once staff actually click Save, same as any
+    other new record -- this event exists so "record #58 started life as
+    a clone of #42" is answerable later even if #58 is never saved (e.g.
+    staff clone then cancel out), which log_record_saved alone couldn't
+    show."""
+    _logger.info(_kv({"event": "record_cloned", "user": _user(), "source_record_id": source_record_id}))
+
+
 def log_print(record_id: int | None, output_path: str) -> None:
     """Logs a PREVIEW render (opened in a PDF viewer for a visual check --
     see gui/new_idl_form.py's print_preview) -- nothing physically printed

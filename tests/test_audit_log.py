@@ -119,6 +119,14 @@ class LogEventFormatTest(AuditLogTestCase):
         content = self._read_log()
         self.assertIn('old=""', content)
 
+    # -- 2026-09-19: "Clone as New Record" (see gui/records_screen.py) ----
+
+    def test_record_cloned_logs_the_source_record_id(self):
+        audit_log.log_record_cloned(source_record_id=42)
+        content = self._read_log()
+        self.assertIn("event=record_cloned", content)
+        self.assertIn("source_record_id=42", content)
+
     def test_print_logs_unsaved_when_no_record_id(self):
         audit_log.log_print(None, "/tmp/preview.pdf")
         content = self._read_log()

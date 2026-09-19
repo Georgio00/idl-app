@@ -1,5 +1,5 @@
 """
-Records screen — search, open (for editing/re-saving), and reprint a
+Records screen — search, open (for editing/re-saving), reprint, or clone a
 previously saved IDL record.
 
 2026-09-07: added because the app had no way to do any of this. Before
@@ -16,7 +16,20 @@ Search is a simple client-side substring filter over the already-decrypted
 list_records() result (see db/storage.py's docstring on why decrypting the
 whole table is fine at this app's scale) — no SQL LIKE query against the
 encrypted column is possible anyway, since the fields are opaque
-ciphertext at rest by design.
+ciphertext at rest by design. Typing a driving license number (Original
+Document.Number) into the search box finds it the same way any other
+field does, since _matches() checks every field's value.
+
+2026-09-19: added "Clone as New Record" (on request, after Georgio shared
+a video of LAA's own equivalent workflow: a returning client's driving
+license number is searched, then LAA's "Clone" button starts a brand new
+IDL prefilled with that client's personal/original-document/receipt-payer
+details, with only the Issued Document Number and Date reset for the new
+transaction). This is deliberately a THIRD action distinct from both
+"Open for Edit" (which UPDATES the same historical row — wrong here, since
+that would silently overwrite the old visit's record) and "Reprint" (which
+doesn't create anything new at all) — see gui/new_idl_form.py's
+_clone_record docstring for exactly which fields carry over vs. reset.
 """
 
 from __future__ import annotations
@@ -57,6 +70,12 @@ class RecordsScreen(QDialog):
     # gui/new_idl_form.py's _load_record).
     record_opened = Signal(int, dict)
 
+    # Emitted with (source_record_id, fields dict) when the user picks
+    # "Clone as New Record" — see gui/new_idl_form.py's _clone_record for
+    # what it does with these (NOT the same as record_opened: cloning
+    # starts a brand new, unsaved record rather than editing source_record_id).
+    record_cloned = Signal(int, dict)
+
     def __init__(self, storage: Storage, parent=None):
         super().__init__(parent)
         self.storage = storage
@@ -85,11 +104,20 @@ class RecordsScreen(QDialog):
         button_row = QHBoxLayout()
         self.open_btn = QPushButton("Open for Edit")
         self.open_btn.clicked.connect(self._open_selected)
+        self.clone_btn = QPushButton("Clone as New Record")
+        self.clone_btn.setToolTip(
+            "Start a brand new IDL for a returning client, reusing this record's "
+            "personal/original-document/receipt-payer details. The old record is "
+            "left untouched — only the Issued Document Number and Date are reset "
+            "for the new transaction."
+        )
+        self.clone_btn.clicked.connect(self._clone_selected)
         self.reprint_btn = QPushButton("Reprint")
         self.reprint_btn.clicked.connect(self._reprint_selected)
         self.close_btn = QPushButton("Close")
         self.close_btn.clicked.connect(self.reject)
         button_row.addWidget(self.open_btn)
+        button_row.addWidget(self.clone_btn)
         button_row.addWidget(self.reprint_btn)
         button_row.addStretch()
         button_row.addWidget(self.close_btn)
@@ -128,6 +156,14 @@ class RecordsScreen(QDialog):
             QMessageBox.information(self, "No selection", "Select a record first.")
             return
         self.record_opened.emit(record.id, record.fields)
+        self.accept()
+
+    def _clone_selected(self):
+        record = self._selected_record()
+        if record is None:
+            QMessageBox.information(self, "No selection", "Select a record first.")
+            return
+        self.record_cloned.emit(record.id, record.fields)
         self.accept()
 
     def _reprint_selected(self):

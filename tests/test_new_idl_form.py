@@ -51,7 +51,7 @@ from PySide6.QtWidgets import QApplication
 _app = QApplication.instance() or QApplication([])
 
 with mock.patch("gui.new_idl_form.Storage"):
-    from gui.new_idl_form import DEFAULT_PLACE_OF_ISSUE, NEVER_AUTOFILLED_FIELDS, NewIDLForm
+    from gui.new_idl_form import DEFAULT_PLACE_OF_ISSUE, NEVER_AUTOFILLED_FIELDS, NORMAL_STYLE, NewIDLForm
 
 from ocr.pipeline import AutofillResult, FormField
 
@@ -269,6 +269,115 @@ class ResetToNewRecordTest(unittest.TestCase):
         })
 
         self.assertEqual(self.form.fields["Receipt.Received from"].text(), "PAID BY COMPANY XYZ")
+
+
+class CloneRecordTest(unittest.TestCase):
+    """Regression coverage for _clone_record (added 2026-09-19, see its own
+    docstring) -- a returning client's prior record is reused to start a
+    brand new IDL, per a real recording of LAA's own equivalent Georgio
+    shared. The one thing every test here ultimately guards against is the
+    same real risk: a returning client's Clone silently overwriting their
+    PREVIOUS visit's saved record instead of creating a new one."""
+
+    SOURCE_FIELDS = {
+        "Surname": "KORDAHI", "First Name": "KARIM", "Father's Name": "KAMAL",
+        "Place of B.": "JBEIL", "Date of B.": "16/09/1981",
+        "Original Document.Number": "1512683", "Original Document.Date": "18/11/1999",
+        "Original Document.Place of Issue": "CGCV", "Original Document.Category": "B",
+        "Original Document.Expiry Date": "18/11/2031",
+        "Issued Document.Number": "344629", "Issued Document.Date": "10/09/2026",
+        "Receipt.Received from": "KARIM KORDAHI", "Receipt.Amount(LBP)": "5000000",
+        "Receipt.Date": "10/09/2026",
+    }
+
+    def setUp(self):
+        self.form = _make_form()
+        self.form._clone_record(7, dict(self.SOURCE_FIELDS))
+
+    def test_personal_fields_carry_over(self):
+        for key in ("Surname", "First Name", "Father's Name", "Place of B.", "Date of B."):
+            self.assertEqual(self.form.fields[key].text(), self.SOURCE_FIELDS[key])
+
+    def test_original_document_fields_carry_over_unchanged(self):
+        # The whole point: the physical original license didn't change,
+        # so none of its details should reset just because this is a new
+        # transaction for the same client.
+        for key in ("Number", "Date", "Place of Issue", "Category", "Expiry Date"):
+            full_key = f"Original Document.{key}"
+            self.assertEqual(self.form.fields[full_key].text(), self.SOURCE_FIELDS[full_key])
+
+    def test_receipt_received_from_and_amount_carry_over(self):
+        self.assertEqual(self.form.fields["Receipt.Received from"].text(), "KARIM KORDAHI")
+        self.assertEqual(self.form.fields["Receipt.Amount(LBP)"].text(), "5000000")
+
+    def test_issued_document_number_resets_to_blank(self):
+        # Matches a genuinely new record: save_record() auto-generates a
+        # fresh serial for a blank Issued Document Number at Save time.
+        self.assertEqual(self.form.fields["Issued Document.Number"].text(), "")
+
+    def test_issued_document_date_resets_to_today(self):
+        expected = date.today().strftime("%d/%m/%Y")
+        self.assertEqual(self.form.fields["Issued Document.Date"].text(), expected)
+
+    def test_receipt_date_resets_to_blank(self):
+        self.assertEqual(self.form.fields["Receipt.Date"].text(), "")
+
+    def test_current_record_id_stays_none_so_save_inserts_not_updates(self):
+        # The core safety property: Save after a Clone must INSERT a new
+        # row, never UPDATE the source record (source_record_id=7).
+        self.assertIsNone(self.form.current_record_id)
+
+    def test_save_baseline_resets_to_none_like_a_genuinely_new_record(self):
+        self.assertIsNone(self.form._save_baseline)
+
+    def test_title_label_mentions_the_source_record_id(self):
+        self.assertIn("7", self.form.title_label.text())
+        self.assertIn("Creating New IDL", self.form.title_label.text())
+
+    def test_photo_upload_boxes_are_cleared(self):
+        form = _make_form()
+        form.passport_box.image_path = "/fake/passport.jpg"
+        form.license_front_box.image_path = "/fake/front.jpg"
+        form.license_back_box.image_path = "/fake/back.jpg"
+
+        form._clone_record(7, dict(self.SOURCE_FIELDS))
+
+        for box in (form.passport_box, form.license_front_box, form.license_back_box):
+            self.assertIsNone(box.image_path)
+
+    def test_logs_the_source_record_id(self):
+        form = _make_form()
+        with mock.patch("gui.new_idl_form.log_record_cloned") as log_mock:
+            form._clone_record(7, dict(self.SOURCE_FIELDS))
+        log_mock.assert_called_once_with(7)
+
+    def test_a_manually_overridden_received_from_is_not_clobbered_by_a_later_name_edit(self):
+        # Same "not overwritten by a stale auto value" rule
+        # ResetToNewRecordTest already pins down for _load_record: when
+        # the source record's "Receipt.Received from" is a genuine manual
+        # override (someone other than the applicant picked up/paid for a
+        # past document -- not just "{First Name} {Surname}"), a later
+        # Surname/First Name edit on the clone must not silently blow that
+        # override away. (When the source value instead already equals
+        # what the live sync would compute anyway -- the common case, see
+        # test_receipt_received_from_and_amount_carry_over -- continuing
+        # to live-sync it is correct, not a bug: there's nothing to
+        # distinguish it from a fresh sync-produced value.)
+        form = _make_form()
+        fields = dict(self.SOURCE_FIELDS)
+        fields["Receipt.Received from"] = "PAID BY COMPANY XYZ"
+        form._clone_record(7, fields)
+
+        form.fields["Surname"].setText("DIFFERENT")
+
+        self.assertEqual(form.fields["Receipt.Received from"].text(), "PAID BY COMPANY XYZ")
+
+    def test_clears_field_flag_styling_from_the_source_record(self):
+        # A field left flagged (orange) on the source record must not
+        # visually carry that flag over into the new record.
+        self.form.set_field("Surname", "KORDAHI", flagged=True)
+        self.form._clone_record(7, dict(self.SOURCE_FIELDS))
+        self.assertEqual(self.form.fields["Surname"].styleSheet(), NORMAL_STYLE)
 
 
 if __name__ == "__main__":
