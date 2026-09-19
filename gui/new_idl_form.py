@@ -38,6 +38,26 @@ below — and "Receipt.Received from" auto-fills live from Surname + First
 Name as they're typed, unless staff have typed something else into it by
 hand — see _sync_received_from_name's docstring for exactly how that's
 kept from clobbering a manual entry.
+
+2026-09-19: Georgio sent a screenshot of LAA itself (the reference app this
+form's field set was originally modeled on) and asked for "the same page
+layout" plus "make the words bigger and everything bigger". Two changes:
+
+1. Original Document's Number/Date, Issued Document's Number/Date, and
+   Receipt's Amount(LBP)/Date are now each PAIRED on one row (label, field,
+   label, field) instead of stacked one-per-row — this is what LAA's own
+   screen actually does (confirmed directly against the screenshot) and
+   what our plain QFormLayout-per-group couldn't express, since a
+   QFormLayout row is always exactly one label + one field. These three
+   groups switched from QFormLayout to QGridLayout for this reason —
+   see _add_paired_row/_add_full_row below. (Georgio confirmed separately
+   that Mother's Name/Address/Phone/Email/Blood Type, which the screenshot
+   still shows as empty LAA-only rows, should STAY off this screen — that
+   2026-09-14 trim wasn't being reversed, only the row-pairing was new.)
+2. A form-wide stylesheet (see BASE_STYLESHEET below) raises the font size
+   and field/button padding across every field, label, button, and group
+   box title on this screen, plus the window's default size grew to match
+   — a blanket "everything bigger" change, not field-by-field tuning.
 """
 
 import logging
@@ -49,8 +69,8 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLineEdit, QPushButton, QLabel, QGroupBox, QMessageBox, QProgressDialog,
-    QScrollArea, QFrame,
+    QGridLayout, QLineEdit, QPushButton, QLabel, QGroupBox, QMessageBox,
+    QProgressDialog, QScrollArea, QFrame,
 )
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -79,6 +99,45 @@ DEBUG_OCR = os.environ.get("IDL_APP_DEBUG_OCR", "").strip().lower() in ("1", "tr
 
 FLAG_STYLE = "background-color: #fff3cd; border: 1px solid #e0a800; color: #000;"
 NORMAL_STYLE = ""
+
+# 2026-09-19: "make the words bigger and everything bigger" (on request,
+# comparing against a screenshot of LAA's own, larger-looking screen).
+# Applied once, on the central widget, rather than field-by-field: Qt's
+# stylesheet cascade means every QLineEdit/QLabel/QPushButton/QGroupBox
+# under `central` (which is every widget on this whole form, including
+# ones built inside ImageUploadBox — see that module's title_label, which
+# only sets font-weight itself and so inherits font-size from here) picks
+# this up automatically, with no per-widget font-size calls to keep in
+# sync as fields get added or removed. FLAG_STYLE/NORMAL_STYLE above stay
+# separate (set per-field via setStyleSheet in set_field) since Qt only
+# lets a widget have one stylesheet string at a time — set_field's
+# setStyleSheet call replaces this cascade's effect for that one widget,
+# which is why FLAG_STYLE repeats the border/background look rather than
+# just toggling a class.
+BASE_STYLESHEET = """
+    QWidget { font-size: 13pt; }
+    QLineEdit {
+        font-size: 13pt;
+        padding: 6px 8px;
+        min-height: 22px;
+    }
+    QPushButton {
+        font-size: 13pt;
+        padding: 7px 16px;
+        min-height: 22px;
+    }
+    QGroupBox {
+        font-size: 14pt;
+        font-weight: bold;
+        margin-top: 14px;
+        padding-top: 12px;
+    }
+    QGroupBox::title {
+        subcontrol-origin: margin;
+        left: 10px;
+        padding: 0 6px;
+    }
+"""
 
 # 2026-09-14: every IDL this company issues is through the same branch/
 # office, so "Original Document.Place of Issue" is always "CGCV" in
@@ -157,10 +216,15 @@ class NewIDLForm(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("New IDL — Auto-fill")
-        self.resize(880, 780)
+        # 1050x900: bumped up from 880x780 (2026-09-19) alongside
+        # BASE_STYLESHEET's bigger fonts -- the old size was tuned for the
+        # old, smaller field/button rendering and started needing more
+        # scrolling once everything got bigger.
+        self.resize(1050, 900)
 
         central = QWidget()
         self.setCentralWidget(central)
+        central.setStyleSheet(BASE_STYLESHEET)
         outer = QVBoxLayout(central)
 
         # --- Top bar: save/cancel, matching LAA's Save/Cancel row
@@ -204,7 +268,7 @@ class NewIDLForm(QMainWindow):
         outer.addLayout(top_bar)
 
         self.title_label = QLabel("Creating New IDL")
-        self.title_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #1a5fb4;")
+        self.title_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #1a5fb4;")
         outer.addWidget(self.title_label)
 
         columns = QHBoxLayout()
@@ -269,34 +333,67 @@ class NewIDLForm(QMainWindow):
         personal_box.setLayout(personal_form)
         left_column.addWidget(personal_box)
 
+        # --- Original Document / Issued Document / Receipt groups
+        # 2026-09-19: these three switched from QFormLayout to QGridLayout
+        # so Number/Date (Original + Issued Document) and Amount(LBP)/Date
+        # (Receipt) can sit PAIRED on one row, matching LAA's own screen —
+        # a QFormLayout row can only ever hold one label + one field, which
+        # is why this couldn't be done without changing layout type. See
+        # _add_paired_row/_add_full_row just below and this module's
+        # docstring for the full 2026-09-19 change.
+        def _add_paired_row(grid: QGridLayout, row: int, label1: str, key1: str, label2: str, key2: str):
+            edit1, edit2 = QLineEdit(), QLineEdit()
+            self.fields[key1] = edit1
+            self.fields[key2] = edit2
+            grid.addWidget(QLabel(label1 + ":"), row, 0)
+            grid.addWidget(edit1, row, 1)
+            grid.addWidget(QLabel(label2 + ":"), row, 2)
+            grid.addWidget(edit2, row, 3)
+
+        def _add_full_row(grid: QGridLayout, row: int, label: str, key: str):
+            edit = QLineEdit()
+            self.fields[key] = edit
+            grid.addWidget(QLabel(label + ":"), row, 0)
+            grid.addWidget(edit, row, 1, 1, 3)  # span the two value columns, same width as a paired row's two fields combined
+            return edit
+
+        def _set_value_column_stretch(grid: QGridLayout):
+            # Label columns (0, 2) stay their natural (small) width; value
+            # columns (1, 3) share the rest of the row's width evenly —
+            # matches the screenshot's proportions, where each field takes
+            # up roughly half the group's width on a paired row.
+            grid.setColumnStretch(1, 1)
+            grid.setColumnStretch(3, 1)
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(8)
+
         # --- Original Document group
         orig_box = QGroupBox("Original Document")
-        orig_form = QFormLayout()
-        for label in ["Number", "Date", "Place of Issue", "Category", "Expiry Date"]:
-            edit = QLineEdit()
-            self.fields[f"Original Document.{label}"] = edit
-            orig_form.addRow(label + ":", edit)
-        orig_box.setLayout(orig_form)
+        orig_grid = QGridLayout()
+        _add_paired_row(orig_grid, 0, "Number", "Original Document.Number", "Date", "Original Document.Date")
+        _add_full_row(orig_grid, 1, "Place of Issue", "Original Document.Place of Issue")
+        _add_full_row(orig_grid, 2, "Category", "Original Document.Category")
+        _add_full_row(orig_grid, 3, "Expiry Date", "Original Document.Expiry Date")
+        _set_value_column_stretch(orig_grid)
+        orig_box.setLayout(orig_grid)
         left_column.addWidget(orig_box)
 
         # --- Issued Document group
         issued_box = QGroupBox("Issued Document")
-        issued_form = QFormLayout()
-        for label in ["Number", "Date", "Signature"]:
-            edit = QLineEdit()
-            self.fields[f"Issued Document.{label}"] = edit
-            issued_form.addRow(label + ":", edit)
-        issued_box.setLayout(issued_form)
+        issued_grid = QGridLayout()
+        _add_paired_row(issued_grid, 0, "Number", "Issued Document.Number", "Date", "Issued Document.Date")
+        _add_full_row(issued_grid, 1, "Signature", "Issued Document.Signature")
+        _set_value_column_stretch(issued_grid)
+        issued_box.setLayout(issued_grid)
         left_column.addWidget(issued_box)
 
         # --- Receipt group
         receipt_box = QGroupBox("Receipt")
-        receipt_form = QFormLayout()
-        for label in ["Received from", "Date", "Amount(LBP)"]:
-            edit = QLineEdit()
-            self.fields[f"Receipt.{label}"] = edit
-            receipt_form.addRow(label + ":", edit)
-        receipt_box.setLayout(receipt_form)
+        receipt_grid = QGridLayout()
+        _add_full_row(receipt_grid, 0, "Received from", "Receipt.Received from")
+        _add_paired_row(receipt_grid, 1, "Amount(LBP)", "Receipt.Amount(LBP)", "Date", "Receipt.Date")
+        _set_value_column_stretch(receipt_grid)
+        receipt_box.setLayout(receipt_grid)
         left_column.addWidget(receipt_box)
 
         left_column.addStretch()
@@ -330,12 +427,12 @@ class NewIDLForm(QMainWindow):
         upload_box_layout.setSpacing(10)
         upload_scroll.setWidget(upload_box_widget)
 
-        # 130: bumped up from 100 on request ("make them a bit bigger") --
-        # still comfortably fits all three at this window's default size
-        # (880x780, no scrolling: verified content height 626px against a
-        # ~658px viewport) while staying well short of 150 (the
-        # ImageUploadBox default), which needed scrolling even at 780.
-        UPLOAD_BOX_SQUARE_SIZE = 130
+        # 150 (ImageUploadBox's own default): bumped up again from 130 as
+        # part of the 2026-09-19 "make everything bigger" change, now that
+        # the window's default height grew from 780 to 900 to match --
+        # this panel's own QScrollArea (see above) is still there as a
+        # fallback if a shrunk window ever makes scrolling necessary again.
+        UPLOAD_BOX_SQUARE_SIZE = 150
         self.passport_box = ImageUploadBox(
             "Passport", "Select the passport photo page", square_size=UPLOAD_BOX_SQUARE_SIZE)
         self.license_front_box = ImageUploadBox(
