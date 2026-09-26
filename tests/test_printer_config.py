@@ -51,6 +51,53 @@ class ConfiguredPrinterNameTestCase(unittest.TestCase):
         self.assertIsNone(printer_config.get_configured_printer_name())
 
 
+class PrinterPurposeTest(unittest.TestCase):
+    """2026-09-26: booklet vs receipt are independent settings (see this
+    module's docstring note) -- added alongside "Print Receipt"."""
+
+    def setUp(self):
+        self.tmp_dir = Path(tempfile.mkdtemp())
+        self._orig_path = printer_config.PRINTER_CONFIG_PATH
+        printer_config.PRINTER_CONFIG_PATH = self.tmp_dir / "printer_config.json"
+
+    def tearDown(self):
+        printer_config.PRINTER_CONFIG_PATH = self._orig_path
+
+    def test_booklet_is_the_default_purpose(self):
+        printer_config.set_configured_printer_name("Booklet Tray Printer")
+        self.assertEqual(
+            printer_config.get_configured_printer_name(purpose="booklet"),
+            printer_config.get_configured_printer_name(),
+        )
+
+    def test_receipt_purpose_starts_unconfigured_even_when_booklet_is_set(self):
+        printer_config.set_configured_printer_name("Booklet Tray Printer", purpose="booklet")
+        self.assertIsNone(printer_config.get_configured_printer_name(purpose="receipt"))
+
+    def test_setting_receipt_does_not_clobber_booklet(self):
+        printer_config.set_configured_printer_name("Booklet Tray Printer", purpose="booklet")
+        printer_config.set_configured_printer_name("Front Desk Printer", purpose="receipt")
+        self.assertEqual(printer_config.get_configured_printer_name(purpose="booklet"), "Booklet Tray Printer")
+        self.assertEqual(printer_config.get_configured_printer_name(purpose="receipt"), "Front Desk Printer")
+
+    def test_setting_booklet_does_not_clobber_an_already_set_receipt(self):
+        printer_config.set_configured_printer_name("Front Desk Printer", purpose="receipt")
+        printer_config.set_configured_printer_name("Booklet Tray Printer", purpose="booklet")
+        self.assertEqual(printer_config.get_configured_printer_name(purpose="receipt"), "Front Desk Printer")
+        self.assertEqual(printer_config.get_configured_printer_name(purpose="booklet"), "Booklet Tray Printer")
+
+    def test_overwriting_one_purpose_only_replaces_that_purpose(self):
+        printer_config.set_configured_printer_name("Front Desk Printer", purpose="receipt")
+        printer_config.set_configured_printer_name("Back Office Printer", purpose="receipt")
+        self.assertEqual(printer_config.get_configured_printer_name(purpose="receipt"), "Back Office Printer")
+
+    def test_unknown_purpose_raises(self):
+        with self.assertRaises(ValueError):
+            printer_config.get_configured_printer_name(purpose="fax")
+        with self.assertRaises(ValueError):
+            printer_config.set_configured_printer_name("Something", purpose="fax")
+
+
 class ListAvailablePrintersTest(unittest.TestCase):
     def test_parses_one_printer_per_line(self):
         fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="Printer A\nPrinter B\n", stderr="")

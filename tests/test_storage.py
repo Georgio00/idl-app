@@ -64,6 +64,26 @@ class SaveAndGetRecordTest(unittest.TestCase):
         second = self.storage.next_issued_document_number()
         self.assertNotEqual(first, second)
 
+    def test_next_receipt_number_increments(self):
+        first = self.storage.next_receipt_number()
+        second = self.storage.next_receipt_number()
+        self.assertNotEqual(first, second)
+
+    def test_next_receipt_number_has_no_idl_prefix(self):
+        # Unlike next_issued_document_number's "IDL-" prefix -- the real
+        # receipt's own "No." line is a plain running number (see
+        # db/storage.py's next_receipt_number docstring).
+        number = self.storage.next_receipt_number()
+        self.assertNotIn("IDL-", number)
+
+    def test_receipt_number_sequence_is_independent_of_issued_document_number(self):
+        # The two must never share or influence each other's counter --
+        # see db/storage.py's 2026-09-26 docstring note.
+        self.storage.next_issued_document_number()
+        self.storage.next_issued_document_number()
+        first_receipt = self.storage.next_receipt_number()
+        self.assertEqual(first_receipt, "000001")
+
 
 class ListRecordsTest(unittest.TestCase):
     def setUp(self):

@@ -106,6 +106,17 @@ class PairedRowLayoutTest(unittest.TestCase):
         amount_row = _grid_row(self.form.fields["Receipt.Amount(LBP)"])
         self.assertNotEqual(branch_row, amount_row)
 
+    def test_receipt_number_gets_its_own_row(self):
+        # 2026-09-26 ("Print Receipt"): "No." sits above Received from,
+        # on its own row -- not paired with anything, since there's no
+        # natural second field to pair it with the way Amount/Date and
+        # Branch/User are.
+        number_row = _grid_row(self.form.fields["Receipt.Number"])
+        received_from_row = _grid_row(self.form.fields["Receipt.Received from"])
+        amount_row = _grid_row(self.form.fields["Receipt.Amount(LBP)"])
+        branch_row = _grid_row(self.form.fields["Receipt.Branch"])
+        self.assertNotIn(number_row, (received_from_row, amount_row, branch_row))
+
     def test_personal_details_fields_are_not_on_a_grid_at_all(self):
         # Personal details deliberately stayed a plain QFormLayout (one
         # field per row, same as before) -- only Original Document/Issued

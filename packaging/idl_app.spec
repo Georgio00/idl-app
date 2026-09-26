@@ -100,6 +100,11 @@ a = Analysis(
         # step, see image_prep.align_to_reference's docstring for why
         # that step matters for accuracy).
         (str(PROJECT_ROOT / "ocr" / "reference_templates"), "ocr/reference_templates"),
+        # Cash Receipt logo (printing/receipt_page.py reads this by path
+        # relative to the module file, same PyInstaller-relocation concern
+        # as the reference photos above -- see assets/README.md, added
+        # 2026-09-26 for the "Print Receipt" feature).
+        (str(PROJECT_ROOT / "assets"), "assets"),
     ],
     hiddenimports=[
         # google-cloud-vision's gRPC transport and PySide6's platform

@@ -33,6 +33,15 @@ fresh install) is always an admin -- otherwise a brand new install could
 end up with no one able to manage staff accounts at all. See
 delete_user/set_admin below for why the LAST remaining admin can't be
 removed or demoted either, for the same reason.
+
+2026-09-26: added a "receipt_number_sequence" table (see
+next_receipt_number below), for the "Print Receipt"/"View Receipt"
+feature added the same day (see gui/new_idl_form.py and
+printing/receipt_page.py). Same plain/unencrypted, independently-queryable
+treatment as issued_number_sequence above, and deliberately a SEPARATE
+counter from it — the two numbers appear on two different physical
+documents (the IDP booklet page vs. the cash receipt) and must never be
+confused with or influence each other.
 """
 
 from __future__ import annotations
@@ -120,6 +129,25 @@ class Storage:
         self._conn.execute(
             "INSERT OR IGNORE INTO issued_number_sequence (id, next_number) VALUES (1, 1)"
         )
+        # 2026-09-26: separate sequence for "Receipt.Number" (see
+        # gui/new_idl_form.py's _ensure_receipt_number and
+        # printing/receipt_page.py) -- unlike Issued Document Number
+        # (which stopped being auto-generated 2026-09-19, see that field's
+        # own history above), Georgio confirmed the receipt's own "No."
+        # SHOULD be auto-generated, matching LAA's own screen (which has
+        # no visible field for it at all -- it's assigned automatically).
+        # A separate table, not a shared one with issued_number_sequence,
+        # because the two are unrelated counters that must never
+        # interfere with each other's numbering.
+        self._conn.execute(
+            """CREATE TABLE IF NOT EXISTS receipt_number_sequence (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                next_number INTEGER NOT NULL
+            )"""
+        )
+        self._conn.execute(
+            "INSERT OR IGNORE INTO receipt_number_sequence (id, next_number) VALUES (1, 1)"
+        )
         # 2026-09-19: staff login accounts (see gui/login_dialog.py) --
         # added after Georgio shared a video of LAA's own login screen,
         # whose logged-in username is what fills each record's "User"
@@ -163,6 +191,22 @@ class Storage:
         )
         self._conn.commit()
         return f"IDL-{n:06d}"
+
+    def next_receipt_number(self) -> str:
+        """Used by gui/new_idl_form.py's _ensure_receipt_number the first
+        time a receipt is viewed/printed for a given record -- see this
+        module's docstring and the receipt_number_sequence table above.
+        No "IDL-" prefix (unlike next_issued_document_number): the
+        printed receipt's own "No." line reads as a plain running number
+        on LAA's real screen (Georgio's 2026-09-26 video), not a
+        document-type-prefixed serial."""
+        cur = self._conn.execute("SELECT next_number FROM receipt_number_sequence WHERE id = 1")
+        (n,) = cur.fetchone()
+        self._conn.execute(
+            "UPDATE receipt_number_sequence SET next_number = ? WHERE id = 1", (n + 1,)
+        )
+        self._conn.commit()
+        return f"{n:06d}"
 
     def save_record(self, fields: dict) -> int:
         plaintext = json.dumps(fields, ensure_ascii=False).encode("utf-8")

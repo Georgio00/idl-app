@@ -226,6 +226,45 @@ def log_print_dispatch_failed(record_id: int | None, printer_name: str, message:
     }))
 
 
+# -- Cash Receipt (2026-09-26, see gui/new_idl_form.py's view_receipt/ ------
+# print_receipt_to_printer and printing/receipt_page.py) -- deliberately
+# separate event names from the booklet-page print_* events above, even
+# though the shape mirrors them exactly, so "a booklet page was printed"
+# and "a receipt was printed" stay distinguishable when reading/grepping
+# this log later -- the two are physically different documents.
+
+def log_receipt_view(record_id: int | None, output_path: str) -> None:
+    """Logs a PREVIEW render (opened in a PDF viewer for a visual check --
+    see gui/new_idl_form.py's view_receipt) -- nothing physically printed
+    yet. See log_receipt_dispatched for an actual send-to-printer event."""
+    _logger.info(_kv({
+        "event": "receipt_rendered",
+        "user": _user(),
+        "record_id": record_id if record_id is not None else "unsaved",
+        "output_path": output_path,
+    }))
+
+
+def log_receipt_dispatched(record_id: int | None, printer_name: str, output_path: str) -> None:
+    _logger.info(_kv({
+        "event": "receipt_dispatched",
+        "user": _user(),
+        "record_id": record_id if record_id is not None else "unsaved",
+        "printer": printer_name,
+        "output_path": output_path,
+    }))
+
+
+def log_receipt_dispatch_failed(record_id: int | None, printer_name: str, message: str) -> None:
+    _logger.info(_kv({
+        "event": "receipt_dispatch_failed",
+        "user": _user(),
+        "record_id": record_id if record_id is not None else "unsaved",
+        "printer": printer_name,
+        "message": message,
+    }))
+
+
 def log_update_available(current_version: str, new_version: str) -> None:
     """2026-09-11: the auto-updater (see updater/) found a newer version
     on startup and is about to show staff the "Update available?" prompt

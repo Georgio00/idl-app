@@ -17,6 +17,22 @@ than adding a pywin32 dependency for Win32 printer-enumeration APIs —
 PowerShell is guaranteed present on every target Windows machine this app
 runs on, so this avoids a new native/compiled dependency for something a
 one-line PowerShell command already does.
+
+2026-09-26: added `purpose` to get_configured_printer_name/
+set_configured_printer_name, after Georgio's video of LAA's own screen
+showed a separate "Print Receipt" action (see printing/receipt_page.py and
+gui/new_idl_form.py) alongside the existing booklet-page print. A cash
+receipt is a complete, self-contained page meant for an ordinary printer
+on plain paper — a different physical printer, in general, from the one
+dedicated to the pre-printed IDP booklet tray — so the two need to be
+configured (and remembered) independently rather than sharing one setting,
+which would risk a booklet page being wasted printing a receipt or vice
+versa. `purpose="booklet"` (the default) keeps reading/writing the
+original `printer_name` key so an existing printer_config.json from before
+this change keeps working with no migration needed; `purpose="receipt"`
+reads/writes a new, separate `receipt_printer_name` key that's simply
+absent (== unconfigured, same None-means-never-configured contract as
+before) until Printer Settings is used to set one.
 """
 
 from __future__ import annotations
@@ -28,26 +44,53 @@ from db.storage import APP_DATA_DIR
 
 PRINTER_CONFIG_PATH = APP_DATA_DIR / "printer_config.json"
 
+# Maps each purpose to the JSON key it's stored under -- "booklet" keeps
+# the original key name (see this module's 2026-09-26 docstring note) so
+# an existing config file from before receipts existed keeps working
+# unchanged; "receipt" is the new, independent setting.
+_PURPOSE_KEYS = {
+    "booklet": "printer_name",
+    "receipt": "receipt_printer_name",
+}
 
-def get_configured_printer_name() -> str | None:
+
+def _config_key(purpose: str) -> str:
+    try:
+        return _PURPOSE_KEYS[purpose]
+    except KeyError:
+        raise ValueError(f"Unknown printer purpose: {purpose!r} (expected one of {sorted(_PURPOSE_KEYS)})")
+
+
+def get_configured_printer_name(purpose: str = "booklet") -> str | None:
     """None means "never configured yet" — callers should prompt staff to
     set one (see gui/printer_settings_dialog.py) rather than guessing or
     silently falling back to the OS default printer, since sending a real
     IDL page to the wrong printer/tray wastes a pre-printed blank booklet
-    page, which isn't like wasting a sheet of scratch paper."""
+    page, which isn't like wasting a sheet of scratch paper. `purpose`
+    selects which of the two independent settings to read -- "booklet"
+    (the default, unchanged from before receipts existed) or "receipt"."""
+    key = _config_key(purpose)
     if not PRINTER_CONFIG_PATH.exists():
         return None
     try:
         data = json.loads(PRINTER_CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    name = data.get("printer_name")
+    name = data.get(key)
     return name if name else None
 
 
-def set_configured_printer_name(name: str) -> None:
+def set_configured_printer_name(name: str, purpose: str = "booklet") -> None:
+    key = _config_key(purpose)
     PRINTER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PRINTER_CONFIG_PATH.write_text(json.dumps({"printer_name": name}), encoding="utf-8")
+    existing: dict = {}
+    if PRINTER_CONFIG_PATH.exists():
+        try:
+            existing = json.loads(PRINTER_CONFIG_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+    existing[key] = name
+    PRINTER_CONFIG_PATH.write_text(json.dumps(existing), encoding="utf-8")
 
 
 class PrinterListError(RuntimeError):

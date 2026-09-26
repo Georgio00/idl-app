@@ -826,5 +826,197 @@ class MainLoginWiringTest(unittest.TestCase):
         mock_form_cls.return_value.show.assert_called_once()
 
 
+class ReceiptNumberFieldTest(unittest.TestCase):
+    """Regression coverage for "Receipt.Number" (added 2026-09-26, see
+    this module's docstring's "Print Receipt" paragraph) -- read-only,
+    auto-generated, and must behave like Receipt.User on reset (blanked
+    for a genuinely new record) but like Receipt.Date on Clone (blanked,
+    NOT carried over from the source record, since a clone is a new
+    transaction with its own receipt)."""
+
+    def setUp(self):
+        self.form = _make_form()
+
+    def test_starts_blank_on_a_brand_new_form(self):
+        self.assertEqual(self.form.fields["Receipt.Number"].text(), "")
+
+    def test_reset_to_new_record_clears_it(self):
+        self.form.fields["Receipt.Number"].setText("000042")
+        self.form.reset_to_new_record()
+        self.assertEqual(self.form.fields["Receipt.Number"].text(), "")
+
+    def test_clone_does_not_carry_over_the_source_records_number(self):
+        self.form._clone_record(1, {"Surname": "KORDAHI", "Receipt.Number": "000042"})
+        self.assertEqual(self.form.fields["Receipt.Number"].text(), "")
+
+    def test_load_record_preserves_the_records_own_stored_number(self):
+        # Unlike Clone, opening an already-saved record for editing/
+        # reprinting must show the SAME number it was originally printed
+        # with -- same "preserve the original transaction's history"
+        # reasoning as every other field _load_record's generic loop
+        # already handles.
+        self.form._load_record(7, {"Surname": "KORDAHI", "Receipt.Number": "000042"})
+        self.assertEqual(self.form.fields["Receipt.Number"].text(), "000042")
+
+
+class EnsureReceiptNumberTest(unittest.TestCase):
+    """Regression coverage for _ensure_receipt_number (see its own
+    docstring) -- the lazy-generate-once-then-stay-stable behavior behind
+    both View Receipt and Print Receipt."""
+
+    def setUp(self):
+        self.form = _make_form()
+
+    def test_generates_a_number_when_blank(self):
+        self.form.storage.next_receipt_number.return_value = "000123"
+        result = self.form._ensure_receipt_number()
+        self.assertEqual(result, "000123")
+        self.assertEqual(self.form.fields["Receipt.Number"].text(), "000123")
+        self.form.storage.next_receipt_number.assert_called_once()
+
+    def test_reuses_an_already_assigned_number_without_generating_a_new_one(self):
+        self.form.fields["Receipt.Number"].setText("000042")
+        result = self.form._ensure_receipt_number()
+        self.assertEqual(result, "000042")
+        self.form.storage.next_receipt_number.assert_not_called()
+
+
+class ViewReceiptTest(unittest.TestCase):
+    """Regression coverage for view_receipt (added 2026-09-26) -- mirrors
+    print_preview's "live field text, no save required" contract, but for
+    the Cash Receipt template (printing/receipt_page.py)."""
+
+    def setUp(self):
+        self.form = _make_form()
+        self.form.fields["Surname"].setText("KORDAHI")
+        self.tmp_dir = Path(tempfile.mkdtemp())
+
+    def test_renders_and_opens_the_receipt_pdf(self):
+        self.form.storage.next_receipt_number.return_value = "000123"
+        with mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.receipt_page.render_receipt_from_form_fields") as mock_render, \
+             mock.patch("gui.new_idl_form.os.startfile", create=True) as mock_startfile, \
+             mock.patch("db.audit_log.log_receipt_view"):
+            self.form.view_receipt()
+
+        mock_render.assert_called_once()
+        mock_startfile.assert_called_once()
+
+    def test_never_persists_the_record(self):
+        # Same "preview only" contract as print_preview -- View Receipt
+        # must never save anything, even though it assigns a receipt
+        # number as a side effect.
+        self.form.storage.next_receipt_number.return_value = "000123"
+        with mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.receipt_page.render_receipt_from_form_fields"), \
+             mock.patch("gui.new_idl_form.os.startfile", create=True), \
+             mock.patch("db.audit_log.log_receipt_view"):
+            self.form.view_receipt()
+
+        self.form.storage.save_record.assert_not_called()
+        self.form.storage.update_record.assert_not_called()
+
+    def test_assigns_a_receipt_number_as_a_side_effect(self):
+        self.form.storage.next_receipt_number.return_value = "000123"
+        with mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.receipt_page.render_receipt_from_form_fields"), \
+             mock.patch("gui.new_idl_form.os.startfile", create=True), \
+             mock.patch("db.audit_log.log_receipt_view"):
+            self.form.view_receipt()
+
+        self.assertEqual(self.form.fields["Receipt.Number"].text(), "000123")
+
+    def test_a_render_failure_shows_an_error_and_does_not_open_anything(self):
+        self.form.storage.next_receipt_number.return_value = "000123"
+        with mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.receipt_page.render_receipt_from_form_fields", side_effect=RuntimeError("boom")), \
+             mock.patch("gui.new_idl_form.os.startfile", create=True) as mock_startfile, \
+             mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.view_receipt()
+
+        mock_box.critical.assert_called_once()
+        mock_startfile.assert_not_called()
+
+
+class PrintReceiptTest(unittest.TestCase):
+    """Regression coverage for print_receipt_to_printer (added 2026-09-26)
+    -- mirrors PrintAutoSaveTest's coverage of print_to_printer, but for
+    the Cash Receipt and its own, separate receipt printer setting."""
+
+    def setUp(self):
+        self.form = _make_form()
+        self.form.fields["Surname"].setText("KORDAHI")
+        self.form.fields["Issued Document.Number"].setText("344629")
+        self.form.storage.next_receipt_number.return_value = "000123"
+        self.form.storage.save_record.return_value = 5
+        self.tmp_dir = Path(tempfile.mkdtemp())
+
+    def test_persists_the_record_before_dispatching(self):
+        with mock.patch("gui.new_idl_form.get_configured_printer_name", return_value="Front Desk Printer") as mock_get_printer, \
+             mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.receipt_page.render_receipt_from_form_fields") as mock_render, \
+             mock.patch("printing.print_dispatch.print_pdf_to_printer") as mock_print, \
+             mock.patch("db.audit_log.log_receipt_dispatched"), \
+             mock.patch("db.audit_log.log_receipt_dispatch_failed"), \
+             mock.patch("gui.new_idl_form.QMessageBox"):
+            self.form.print_receipt_to_printer()
+
+        mock_get_printer.assert_called_once_with(purpose="receipt")
+        self.form.storage.save_record.assert_called_once()
+        mock_render.assert_called_once()
+        mock_print.assert_called_once()
+
+    def test_uses_the_receipt_printer_setting_not_the_booklet_one(self):
+        with mock.patch("gui.new_idl_form.get_configured_printer_name", return_value=None) as mock_get_printer, \
+             mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.print_receipt_to_printer()
+
+        mock_get_printer.assert_called_once_with(purpose="receipt")
+        mock_box.warning.assert_called_once()
+        self.form.storage.save_record.assert_not_called()
+
+    def test_does_not_dispatch_when_issued_document_number_is_missing(self):
+        self.form.fields["Issued Document.Number"].setText("")
+        with mock.patch("gui.new_idl_form.get_configured_printer_name", return_value="Front Desk Printer"), \
+             mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.receipt_page.render_receipt_from_form_fields") as mock_render, \
+             mock.patch("printing.print_dispatch.print_pdf_to_printer") as mock_print, \
+             mock.patch("gui.new_idl_form.QMessageBox"):
+            self.form.print_receipt_to_printer()
+
+        self.form.storage.save_record.assert_not_called()
+        mock_render.assert_not_called()
+        mock_print.assert_not_called()
+
+    def test_does_not_show_the_booklet_pages_confirm_dialog(self):
+        # Deliberately no "have you checked Print Preview?" confirmation
+        # for receipts -- see print_receipt_to_printer's own docstring for
+        # why (plain paper, not a costly pre-printed booklet page).
+        with mock.patch("gui.new_idl_form.get_configured_printer_name", return_value="Front Desk Printer"), \
+             mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.receipt_page.render_receipt_from_form_fields"), \
+             mock.patch("printing.print_dispatch.print_pdf_to_printer"), \
+             mock.patch("db.audit_log.log_receipt_dispatched"), \
+             mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.print_receipt_to_printer()
+
+        mock_box.question.assert_not_called()
+
+    def test_a_dispatch_failure_is_logged_and_shown_but_does_not_crash(self):
+        with mock.patch("gui.new_idl_form.get_configured_printer_name", return_value="Front Desk Printer"), \
+             mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.receipt_page.render_receipt_from_form_fields"), \
+             mock.patch(
+                 "printing.print_dispatch.print_pdf_to_printer",
+                 side_effect=RuntimeError("printer offline"),
+             ), \
+             mock.patch("db.audit_log.log_receipt_dispatch_failed") as mock_log_failed, \
+             mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.print_receipt_to_printer()
+
+        mock_log_failed.assert_called_once()
+        mock_box.critical.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

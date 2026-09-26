@@ -143,6 +143,27 @@ button -- it only ever called self.close(), which is exactly what the
 window's own titlebar X button already does (same no-confirmation,
 no-unsaved-changes-check behavior either way), so it was pure
 duplication rather than a distinct action.
+
+2026-09-26: added "View Receipt"/"Print Receipt", mirroring LAA's own
+screen exactly (Georgio shared a video showing that tab's full button row:
+"Print Licence"/"Print Receipt"/"Print Form" and "View Licence"/"View
+Receipt"/"View Form" -- this app already had the Licence pair as Print
+Preview/Print above; Form is not built yet, only Receipt). Unlike the
+booklet page (printing/print_page.py, which overlays data onto a
+PHYSICAL pre-printed blank page), the Cash Receipt (printing/
+receipt_page.py) is a complete, self-contained page this app draws in
+full -- logo, headings, table, everything -- meant for an ordinary
+printer on plain paper, so it needed its OWN printer setting
+(printing/printer_config.py's `purpose` param, gui/printer_settings_dialog.py)
+rather than sharing the booklet tray's. Also added "Receipt.Number" (see
+_ensure_receipt_number): the printed receipt's "No." line, auto-generated
+via db/storage.py's next_receipt_number the first time a receipt is
+actually viewed/printed for a record, and READ-ONLY from then on (same
+treatment as Receipt.User, added to READ_ONLY_FIELDS) since Georgio
+confirmed it should never be typed by hand, unlike Issued Document Number.
+The receipt's logo/exact layout still needs the real LAA seal image
+Georgio is sending separately -- see assets/README.md; the feature works
+correctly without it in the meantime (text header only).
 """
 
 import logging
@@ -193,13 +214,15 @@ NORMAL_STYLE = ""
 # looks different from an enabled one.
 READ_ONLY_FIELD_STYLE = "background-color: #e9ecef; color: #495057;"
 
-# 2026-09-19: the only read-only field so far -- see _add_paired_row's
-# read_only2 param and READ_ONLY_FIELD_STYLE above. Kept as a set (not a
-# hardcoded string literal repeated at each call site) so _load_record/
-# _clone_record/reset_to_new_record's "reset every field's style to
-# NORMAL_STYLE" loops (see _style_for_field just below) don't need to
-# know the field's name specifically, only whether it's in this set.
-READ_ONLY_FIELDS = {"Receipt.User"}
+# 2026-09-19: Receipt.User; 2026-09-26: added Receipt.Number alongside it
+# (see this module's docstring's "Print Receipt" paragraph and
+# _ensure_receipt_number) -- auto-generated the same way, never typed by
+# hand. Kept as a set (not a hardcoded string literal repeated at each
+# call site) so _load_record/_clone_record/reset_to_new_record's "reset
+# every field's style to NORMAL_STYLE" loops (see _style_for_field just
+# below) don't need to know each field's name specifically, only whether
+# it's in this set.
+READ_ONLY_FIELDS = {"Receipt.User", "Receipt.Number"}
 
 
 def _style_for_field(key: str) -> str:
@@ -406,6 +429,15 @@ class NewIDLForm(QMainWindow):
         self.print_preview_btn.clicked.connect(self.print_preview)
         self.print_btn = QPushButton("Print")
         self.print_btn.clicked.connect(self.print_to_printer)
+        # 2026-09-26: "View Receipt"/"Print Receipt" -- mirrors LAA's own
+        # screen (Georgio's video the same day), which has this exact pair
+        # alongside "View Licence"/"Print Licence" (this app's existing
+        # Print Preview/Print above). See view_receipt/print_receipt_to_printer
+        # and printing/receipt_page.py.
+        self.view_receipt_btn = QPushButton("View Receipt")
+        self.view_receipt_btn.clicked.connect(self.view_receipt)
+        self.print_receipt_btn = QPushButton("Print Receipt")
+        self.print_receipt_btn.clicked.connect(self.print_receipt_to_printer)
         top_bar.addWidget(self.records_btn)
         top_bar.addWidget(self.prev_record_btn)
         top_bar.addWidget(self.next_record_btn)
@@ -416,6 +448,8 @@ class NewIDLForm(QMainWindow):
         top_bar.addWidget(self.save_btn)
         top_bar.addWidget(self.print_preview_btn)
         top_bar.addWidget(self.print_btn)
+        top_bar.addWidget(self.view_receipt_btn)
+        top_bar.addWidget(self.print_receipt_btn)
         outer.addLayout(top_bar)
 
         self.title_label = QLabel("Creating New IDL")
@@ -512,9 +546,16 @@ class NewIDLForm(QMainWindow):
             grid.addWidget(QLabel(label2 + ":"), row, 2)
             grid.addWidget(edit2, row, 3)
 
-        def _add_full_row(grid: QGridLayout, row: int, label: str, key: str):
+        def _add_full_row(grid: QGridLayout, row: int, label: str, key: str, read_only: bool = False):
+            # read_only: 2026-09-26, added for Receipt.Number (see this
+            # module's docstring's "Print Receipt" paragraph) -- same
+            # immediate-styling need _add_paired_row's read_only2 already
+            # covers for a paired row's second field.
             edit = QLineEdit()
             self.fields[key] = edit
+            if read_only:
+                edit.setReadOnly(True)
+                edit.setStyleSheet(READ_ONLY_FIELD_STYLE)
             grid.addWidget(QLabel(label + ":"), row, 0)
             grid.addWidget(edit, row, 1, 1, 3)  # span the two value columns, same width as a paired row's two fields combined
             return edit
@@ -552,8 +593,18 @@ class NewIDLForm(QMainWindow):
         # --- Receipt group
         receipt_box = QGroupBox("Receipt")
         receipt_grid = QGridLayout()
-        _add_full_row(receipt_grid, 0, "Received from", "Receipt.Received from")
-        _add_paired_row(receipt_grid, 1, "Amount(LBP)", "Receipt.Amount(LBP)", "Date", "Receipt.Date")
+        # 2026-09-26: "No." -- the receipt's own printed serial (see this
+        # module's docstring's "Print Receipt" paragraph and
+        # _ensure_receipt_number). READ-ONLY and auto-generated the first
+        # time View/Print Receipt is used for this record, same treatment
+        # as Receipt.User just below -- LAA's own screen has no visible
+        # field for this at all, but showing it here (rather than hiding
+        # it off-form entirely) lets staff actually see which number a
+        # printed receipt got, which matters for reconciling a physical
+        # receipt book against this app later.
+        _add_full_row(receipt_grid, 0, "No.", "Receipt.Number", read_only=True)
+        _add_full_row(receipt_grid, 1, "Received from", "Receipt.Received from")
+        _add_paired_row(receipt_grid, 2, "Amount(LBP)", "Receipt.Amount(LBP)", "Date", "Receipt.Date")
         # 2026-09-19: "Branch"/"User" -- LAA's own screen shows both at the
         # bottom of this same group (see this module's docstring). Branch
         # is plain manually-typed text, same treatment as Phone/Email/
@@ -562,7 +613,7 @@ class NewIDLForm(QMainWindow):
         # staff login system added later the same day (see this module's
         # docstring), not typed by hand at all.
         _add_paired_row(
-            receipt_grid, 2, "Branch", "Receipt.Branch", "User", "Receipt.User", read_only2=True,
+            receipt_grid, 3, "Branch", "Receipt.Branch", "User", "Receipt.User", read_only2=True,
         )
         _set_value_column_stretch(receipt_grid)
         receipt_box.setLayout(receipt_grid)
@@ -1002,6 +1053,13 @@ class NewIDLForm(QMainWindow):
         self.fields["Issued Document.Number"].setText("")
         self.fields["Issued Document.Date"].setText(date.today().strftime("%d/%m/%Y"))
         self.fields["Receipt.Date"].setText("")
+        # 2026-09-26: a clone is a brand new transaction with its own cash
+        # receipt, so the source record's receipt number must NOT carry
+        # over -- left blank, same as Receipt.Date just above, so
+        # _ensure_receipt_number assigns this clone a fresh one the first
+        # time its receipt is actually viewed/printed rather than reusing
+        # the original client visit's number.
+        self.fields["Receipt.Number"].setText("")
         self.fields["Receipt.User"].setText(self.current_username or "")
 
         self.current_record_id = None
@@ -1131,6 +1189,106 @@ class NewIDLForm(QMainWindow):
             return
 
         log_print_dispatched(self.current_record_id, printer_name, output_path)
+        QMessageBox.information(self, "Sent to printer", f"Sent to {printer_name}.")
+
+    def _ensure_receipt_number(self) -> str:
+        """Returns this record's Receipt.Number, generating a fresh one via
+        self.storage.next_receipt_number() the first time a receipt is
+        viewed/printed for it. LAA's own screen has no visible "No." field
+        at all -- Georgio confirmed (2026-09-26) it should be auto-
+        generated, the same way Issued Document Number used to be, rather
+        than typed by hand.
+
+        Stable afterward: once assigned it's written straight into the
+        (read-only) Receipt.Number field, so viewing/printing again, or
+        reopening this exact saved record later from the Records screen
+        (_load_record loads whatever value the record was saved with, same
+        as every other field), reuses the same number instead of burning a
+        fresh one from the sequence every time. A number generated here
+        but never actually saved (e.g. staff clicks View Receipt then
+        closes without Save) is permanently consumed from the sequence and
+        never reused -- an accepted trade-off for a sequential numbering
+        scheme, the same one a physical receipt book has if a sheet is
+        torn off by mistake."""
+        current = self.fields["Receipt.Number"].text().strip()
+        if current:
+            return current
+        number = self.storage.next_receipt_number()
+        self.fields["Receipt.Number"].setText(number)
+        return number
+
+    def view_receipt(self):
+        """Renders the current form's data onto the Cash Receipt template
+        (see printing/receipt_page.py) and opens it for a visual check --
+        same "preview only, live field text, no save required" contract as
+        print_preview above, mirroring LAA's own "View Receipt"/"View
+        Licence" pair (Georgio's 2026-09-26 video)."""
+        from db.audit_log import log_receipt_view
+        from printing.receipt_page import render_receipt_from_form_fields
+
+        self._ensure_receipt_number()
+        plain_values = {key: edit.text() for key, edit in self.fields.items()}
+
+        APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = str(APP_DATA_DIR / "receipt_preview.pdf")
+        try:
+            render_receipt_from_form_fields(plain_values, output_path)
+        except Exception as e:  # noqa: BLE001 - surface any failure rather than a silent no-op
+            QMessageBox.critical(self, "Receipt preview failed", f"Could not generate the receipt PDF: {e}")
+            return
+
+        log_receipt_view(self.current_record_id, output_path)
+        os.startfile(output_path)  # Windows-only -- matches this app's target platform
+
+    def print_receipt_to_printer(self):
+        """Sends the current record's Cash Receipt straight to the
+        configured RECEIPT printer -- deliberately a separate printer
+        setting from the IDP booklet's (see printing/printer_config.py's
+        `purpose` param and gui/printer_settings_dialog.py): the booklet
+        printer is a dedicated tray loaded with special pre-printed pages,
+        while a cash receipt is a complete, self-contained page meant for
+        an ordinary printer on plain paper (see printing/receipt_page.py's
+        docstring) -- sending it to the booklet tray by mistake would waste
+        one of those blank pages for nothing.
+
+        Same persist-before-print contract as print_to_printer above (see
+        its own docstring for why): the record is saved first, so a
+        receipt that was actually handed to a client always has a matching
+        saved record (with the receipt number it was actually printed
+        with), even if the physical print then fails for an unrelated
+        reason. Deliberately skips print_to_printer's own "have you
+        checked Print Preview?" confirmation dialog -- that exists
+        specifically because wasting a pre-printed blank booklet page is
+        costly; an ordinary sheet of plain paper isn't."""
+        from db.audit_log import log_receipt_dispatch_failed, log_receipt_dispatched
+        from printing.print_dispatch import print_pdf_to_printer
+        from printing.receipt_page import render_receipt_from_form_fields
+
+        printer_name = get_configured_printer_name(purpose="receipt")
+        if not printer_name:
+            QMessageBox.warning(
+                self, "No receipt printer configured",
+                "Set a receipt printer first via \"Printer Settings...\" before printing.",
+            )
+            return
+
+        self._ensure_receipt_number()
+
+        if self._persist_record() is None:
+            return  # validation failed; _persist_record already explained why
+
+        plain_values = {key: edit.text() for key, edit in self.fields.items()}
+        APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = str(APP_DATA_DIR / "receipt_dispatch_last.pdf")
+        try:
+            render_receipt_from_form_fields(plain_values, output_path)
+            print_pdf_to_printer(output_path, printer_name)
+        except Exception as e:  # noqa: BLE001 - surface any failure (PrintDispatchError or otherwise), never a silent no-op
+            log_receipt_dispatch_failed(self.current_record_id, printer_name, str(e))
+            QMessageBox.critical(self, "Print failed", f"Could not print to {printer_name!r}: {e}")
+            return
+
+        log_receipt_dispatched(self.current_record_id, printer_name, output_path)
         QMessageBox.information(self, "Sent to printer", f"Sent to {printer_name}.")
 
     def run_autofill(self):
