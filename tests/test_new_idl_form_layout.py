@@ -252,6 +252,60 @@ class ToolbarLayoutTest(unittest.TestCase):
         self.assertCountEqual(all_buttons, expected)
 
 
+class ToolbarIconsTest(unittest.TestCase):
+    """2026-09-26 ("add icons like the ones in the image i gave you"):
+    every toolbar button should now carry a non-null icon -- see
+    gui/icons.py and new_idl_form.py's docstring's _TOOLBAR_ICONS mapping.
+    """
+
+    def setUp(self):
+        self.form = _make_form()
+
+    def test_every_toolbar_button_has_a_non_null_icon(self):
+        buttons = [
+            self.form.records_btn,
+            self.form.prev_record_btn,
+            self.form.next_record_btn,
+            self.form.new_btn,
+            self.form.save_btn,
+            self.form.printer_settings_btn,
+            self.form.manage_users_btn,
+            self.form.print_preview_btn,
+            self.form.print_btn,
+            self.form.view_receipt_btn,
+            self.form.print_receipt_btn,
+        ]
+        for button in buttons:
+            self.assertFalse(button.icon().isNull(), button.text())
+
+    def test_receipt_buttons_share_the_same_icon_color_as_each_other(self):
+        # Georgio's reference photo colors Print Receipt/View Receipt the
+        # same green -- both are printer/eye pictograms of the same
+        # color, so their rendered pixmaps' non-transparent pixels should
+        # be the same color even though the pictogram shape differs.
+        from PySide6.QtGui import QImage
+
+        def _opaque_pixel_colors(button):
+            image = button.icon().pixmap(18, 18).toImage().convertToFormat(QImage.Format_RGBA8888)
+            colors = set()
+            for y in range(image.height()):
+                for x in range(image.width()):
+                    pixel = image.pixelColor(x, y)
+                    if pixel.alpha() > 200:
+                        colors.add((pixel.red(), pixel.green(), pixel.blue()))
+            return colors
+
+        receipt_colors = _opaque_pixel_colors(self.form.view_receipt_btn) | _opaque_pixel_colors(
+            self.form.print_receipt_btn
+        )
+        print_colors = _opaque_pixel_colors(self.form.print_btn)
+        # Green (receipt family) and blue (licence/print family) shouldn't
+        # overlap in their fully-opaque colors.
+        self.assertTrue(receipt_colors, "view/print receipt icons painted nothing opaque")
+        self.assertTrue(print_colors, "print icon painted nothing opaque")
+        self.assertEqual(receipt_colors & print_colors, set())
+
+
 class BiggerEverythingStylesheetTest(unittest.TestCase):
     def test_base_stylesheet_raises_field_and_button_font_size(self):
         self.assertIn("font-size: 13pt", BASE_STYLESHEET)

@@ -212,6 +212,24 @@ rows instead of clipping regardless of window size -- not hardcoded to
 whatever screen this was tested on. The body columns keep their existing
 QHBoxLayout (the ID Photos/field groups already scroll vertically, so
 overflow there was never the same failure mode).
+
+2026-09-26 (later again, same day): "add icons like the ones in the image
+i gave you" -- Georgio sent close-up photos of LAA's own screen showing
+every toolbar button with a small colored pictogram (a magnifying glass
+for Search, arrows for Previous/Next, a green plus-circle for New IDL,
+and -- the clearest pattern -- every Print button as a printer icon and
+every View button as an eye icon, colored per output: blue for Licence,
+green for Receipt, red for the not-yet-built Form). Added gui/icons.py
+(hand-drawn via QPainter, not files under assets/ -- see that module's
+own docstring for why) and wired one icon+color onto each existing
+toolbar button via the _TOOLBAR_ICONS mapping below, reusing LAA's own
+blue/green color-per-family pattern: View Receipt/Print Receipt are green
+(an exact match to the reference), Print/Print Preview are blue (this
+app's closest equivalent to Print Licence/View Licence), and Save/Printer
+Settings/Manage Staff Accounts -- which have no colored counterpart in
+the reference photo -- stay a neutral grey. No button's text, tooltip, or
+signal connection changed; see tests/test_icons.py and
+tests/test_new_idl_form_layout.py's ToolbarIconsTest.
 """
 
 import logging
@@ -220,7 +238,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QSize, QThread, Signal
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGridLayout, QLineEdit, QPushButton, QLabel, QGroupBox, QMessageBox,
@@ -235,6 +253,7 @@ from db.audit_log import (
 )
 from db.storage import APP_DATA_DIR, Storage
 from gui.flow_layout import FlowLayout
+from gui.icons import BLUE, GREEN, NEUTRAL, make_icon
 from gui.image_upload_box import ImageUploadBox
 from gui.login_dialog import run_login
 from gui.manage_users_dialog import ManageUsersDialog
@@ -480,10 +499,16 @@ class NewIDLForm(QMainWindow):
         # and _go_to_relative_record). Grouped right next to
         # "Find / Reprint Record..." since both are "browse the saved
         # records" actions.
-        self.prev_record_btn = QPushButton("◀ Previous")
+        # 2026-09-26: dropped the "◀"/"▶" characters from these two labels
+        # (now just "Previous"/"Next") -- once _TOOLBAR_ICONS below gives
+        # each one an actual arrow icon, keeping the arrow character in
+        # the text too just drew two arrows per button ("◀ ◀ Previous").
+        # Nothing behavioral changed and no test asserted the old exact
+        # text (checked before renaming) -- see gui/icons.py.
+        self.prev_record_btn = QPushButton("Previous")
         self.prev_record_btn.setToolTip("Load the previous saved record.")
         self.prev_record_btn.clicked.connect(self.go_to_previous_record)
-        self.next_record_btn = QPushButton("Next ▶")
+        self.next_record_btn = QPushButton("Next")
         self.next_record_btn.setToolTip("Load the next saved record.")
         self.next_record_btn.clicked.connect(self.go_to_next_record)
         self.printer_settings_btn = QPushButton("Printer Settings...")
@@ -517,6 +542,33 @@ class NewIDLForm(QMainWindow):
         self.view_receipt_btn.clicked.connect(self.view_receipt)
         self.print_receipt_btn = QPushButton("Print Receipt")
         self.print_receipt_btn.clicked.connect(self.print_receipt_to_printer)
+
+        # 2026-09-26 ("add icons like the ones in the image i gave you"):
+        # see gui/icons.py's docstring for the color language this mirrors
+        # from LAA's own screen -- blue for the licence/print-preview
+        # family, green for the receipt family, neutral grey for actions
+        # LAA's photo has no colored counterpart for (Save, Printer
+        # Settings, Manage Staff Accounts). One dict instead of a setIcon
+        # call scattered after each button above, so the whole mapping is
+        # visible at a glance and easy to re-check against the reference
+        # photo in one place.
+        _TOOLBAR_ICONS = {
+            self.records_btn: ("search", BLUE),
+            self.prev_record_btn: ("prev", BLUE),
+            self.next_record_btn: ("next", BLUE),
+            self.new_btn: ("new", GREEN),
+            self.save_btn: ("save", NEUTRAL),
+            self.printer_settings_btn: ("settings", NEUTRAL),
+            self.manage_users_btn: ("user", NEUTRAL),
+            self.print_preview_btn: ("eye", BLUE),
+            self.print_btn: ("printer", BLUE),
+            self.view_receipt_btn: ("eye", GREEN),
+            self.print_receipt_btn: ("printer", GREEN),
+        }
+        for button, (kind, color) in _TOOLBAR_ICONS.items():
+            button.setIcon(make_icon(kind, color))
+            button.setIconSize(QSize(18, 18))
+
         # Left group: browsing/creating/saving a record -- mirrors the
         # reference photos' left panel (New/Clone/Prev/Next/Edit/etc.).
         top_bar_left.addWidget(self.records_btn)
