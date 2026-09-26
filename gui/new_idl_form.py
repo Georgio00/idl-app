@@ -192,6 +192,26 @@ one flat row spanning the whole window. Restructured to match:
 No button was renamed, added, or had its signal connection changed --
 this is purely a container/layout regrouping, see
 tests/test_new_idl_form_layout.py's ToolbarLayoutTest.
+
+2026-09-26 (later still, same day): the left/right split above fixed the
+PROPORTIONS but not the actual bug -- Georgio pulled it and screenshotted
+his own machine, and "Print Receipt" was still clipped at the window's
+right edge. Root cause: top_bar_left/top_bar_right were plain
+QHBoxLayouts, and a QHBoxLayout never wraps -- on his real screen (his
+window is narrower than the sum of every button's width at this
+screen's font/DPI), the row simply ran out of room and the last button(s)
+got visually clipped, exactly like before, just wherever the row now
+happened to run out. This wasn't fixable by rearranging which group a
+button was in, since ANY fixed single-row layout will eventually clip
+given a narrow enough window/screen -- the actual missing piece was
+wrapping. Replaced top_bar_left/top_bar_right's QHBoxLayout with
+gui.flow_layout.FlowLayout (see that module's docstring for the
+algorithm), which lays buttons left-to-right and wraps onto a new line
+whenever the next one wouldn't fit, so the toolbar now degrades to more
+rows instead of clipping regardless of window size -- not hardcoded to
+whatever screen this was tested on. The body columns keep their existing
+QHBoxLayout (the ID Photos/field groups already scroll vertically, so
+overflow there was never the same failure mode).
 """
 
 import logging
@@ -214,6 +234,7 @@ from db.audit_log import (
     log_update_available, log_update_declined, log_update_failed,
 )
 from db.storage import APP_DATA_DIR, Storage
+from gui.flow_layout import FlowLayout
 from gui.image_upload_box import ImageUploadBox
 from gui.login_dialog import run_login
 from gui.manage_users_dialog import ManageUsersDialog
@@ -442,8 +463,15 @@ class NewIDLForm(QMainWindow):
         # screen show. Both are combined into top_bar_row further below
         # using the SAME stretch ratio as the body `columns` layout so the
         # toolbar visually lines up with the columns underneath it.
-        top_bar_left = QHBoxLayout()
-        top_bar_right = QHBoxLayout()
+        # FlowLayout (not QHBoxLayout) -- see this module's docstring,
+        # "later still, same day": a QHBoxLayout never wraps, so on a
+        # real screen narrower than the sum of every button's width the
+        # row simply clips its last button(s), which is exactly the bug
+        # this whole restructuring was meant to fix. FlowLayout wraps
+        # onto additional rows instead, so nothing gets clipped no matter
+        # how narrow the window/screen ends up being.
+        top_bar_left = FlowLayout()
+        top_bar_right = FlowLayout()
         self.records_btn = QPushButton("Find / Reprint Record...")
         self.records_btn.clicked.connect(self.open_records_screen)
         # 2026-09-19: "◀ Previous"/"Next ▶" — step straight to the
@@ -496,7 +524,6 @@ class NewIDLForm(QMainWindow):
         top_bar_left.addWidget(self.next_record_btn)
         top_bar_left.addWidget(self.new_btn)
         top_bar_left.addWidget(self.save_btn)
-        top_bar_left.addStretch()
         # Right group: output/settings actions -- mirrors the reference
         # photos' right panel (Print/View Licence, Print/View Receipt...).
         top_bar_right.addWidget(self.printer_settings_btn)
@@ -505,7 +532,10 @@ class NewIDLForm(QMainWindow):
         top_bar_right.addWidget(self.print_btn)
         top_bar_right.addWidget(self.view_receipt_btn)
         top_bar_right.addWidget(self.print_receipt_btn)
-        top_bar_right.addStretch()
+        # FlowLayout has no addStretch (that's QBoxLayout-specific) -- it
+        # doesn't need one, since unlike a QHBoxLayout it never leaves
+        # buttons squeezed against unused trailing space in a way stretch
+        # would fix; it wraps instead.
 
         # Thin vertical divider between the two panels, echoed again
         # between the body columns below -- matches the visible split line
