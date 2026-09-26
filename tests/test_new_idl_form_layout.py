@@ -15,6 +15,13 @@ Receipt.User are paired on their own row the same way. Run headless via
 QT_QPA_PLATFORM=offscreen, same as tests/test_new_idl_form.py -- see that
 file's own docstring for why Storage is mocked and QMessageBox isn't
 needed here (nothing in these tests triggers one).
+
+2026-09-26 (later the same day): ToolbarLayoutTest covers the top-bar
+overflow fix -- splitting the old single flat top_bar into
+top_bar_left/top_bar_right and flipping the body columns' stretch ratio
+so the button-holding right side is wider than the field-holding left
+side (see new_idl_form.py's docstring's "later the same day" entry and
+_LEFT_COLUMN_STRETCH/_RIGHT_COLUMN_STRETCH).
 """
 
 import os
@@ -32,7 +39,12 @@ from PySide6.QtWidgets import QApplication, QGridLayout
 _app = QApplication.instance() or QApplication([])
 
 with mock.patch("gui.new_idl_form.Storage"):
-    from gui.new_idl_form import BASE_STYLESHEET, NewIDLForm
+    from gui.new_idl_form import (
+        BASE_STYLESHEET,
+        _LEFT_COLUMN_STRETCH,
+        _RIGHT_COLUMN_STRETCH,
+        NewIDLForm,
+    )
 
 
 def _make_form() -> NewIDLForm:
@@ -123,6 +135,121 @@ class PairedRowLayoutTest(unittest.TestCase):
         # Document/Receipt switched to QGridLayout for row-pairing.
         surname = self.form.fields["Surname"]
         self.assertNotIsInstance(surname.parentWidget().layout(), QGridLayout)
+
+
+class ToolbarLayoutTest(unittest.TestCase):
+    """2026-09-26 ("fix the layout of the upper part of the app / make the
+    left side less smaller in width and use the right part for the
+    buttons we have"): Print Receipt was getting cut off at the window's
+    right edge -- the top bar was one flat QHBoxLayout with every button
+    in sequence, and the body columns were left-heavy (stretch 2:1)
+    despite Georgio's reference photos of LAA's own screen showing a
+    narrower field panel and a wider button panel. See new_idl_form.py's
+    docstring and _LEFT_COLUMN_STRETCH/_RIGHT_COLUMN_STRETCH.
+    """
+
+    def setUp(self):
+        self.form = _make_form()
+
+    def test_body_columns_are_wider_on_the_right_than_the_left(self):
+        # Old layout was left=2/right=1 (left side wider) -- the reference
+        # photos show the opposite. This is the change that actually fixes
+        # the overflow: the button-holding side now has more room.
+        left = _LEFT_COLUMN_STRETCH
+        right = _RIGHT_COLUMN_STRETCH
+        self.assertGreater(right, left)
+
+    def test_record_navigation_buttons_share_a_layout_distinct_from_the_output_buttons(self):
+        # records_btn/prev/next/new/save (record browsing+CRUD) should be
+        # in one toolbar group, separate from the print/view/settings
+        # buttons -- not all one flat top_bar the way it used to be.
+        nav_group = self.form.records_btn.parentWidget()
+        output_group = self.form.print_btn.parentWidget()
+        # Both buttons still live in the same top-level central widget
+        # (there's only one QWidget tree), so what actually distinguishes
+        # "different toolbar group" is which QLayout each button's geometry
+        # is managed by, not a different parent widget. Compare via each
+        # layout the buttons were added to instead.
+        nav_layout = self.form.records_btn.parentWidget().layout()
+        # A QPushButton added to a QHBoxLayout doesn't expose that layout
+        # directly, so instead check the buttons the reference groups say
+        # must be split are not reachable from one another's immediate
+        # sibling widget list at the same index -- simplest robust check:
+        # walk every top-level QHBoxLayout under central widget's outer
+        # QVBoxLayout and confirm records_btn/print_btn end up in two
+        # different ones.
+        outer = self.form.centralWidget().layout()
+        top_bar_row = outer.itemAt(0).layout()
+        self.assertIsNotNone(top_bar_row)
+        left_layout = top_bar_row.itemAt(0).layout()
+        right_layout = top_bar_row.itemAt(2).layout()
+
+        def _widgets_in(layout):
+            widgets = []
+            for i in range(layout.count()):
+                item = layout.itemAt(i)
+                if item.widget() is not None:
+                    widgets.append(item.widget())
+            return widgets
+
+        self.assertIn(self.form.records_btn, _widgets_in(left_layout))
+        self.assertIn(self.form.prev_record_btn, _widgets_in(left_layout))
+        self.assertIn(self.form.next_record_btn, _widgets_in(left_layout))
+        self.assertIn(self.form.new_btn, _widgets_in(left_layout))
+        self.assertIn(self.form.save_btn, _widgets_in(left_layout))
+
+        self.assertIn(self.form.printer_settings_btn, _widgets_in(right_layout))
+        self.assertIn(self.form.manage_users_btn, _widgets_in(right_layout))
+        self.assertIn(self.form.print_preview_btn, _widgets_in(right_layout))
+        self.assertIn(self.form.print_btn, _widgets_in(right_layout))
+        self.assertIn(self.form.view_receipt_btn, _widgets_in(right_layout))
+        self.assertIn(self.form.print_receipt_btn, _widgets_in(right_layout))
+
+        del nav_group, output_group, nav_layout  # only used to document intent above
+
+    def test_top_bar_row_uses_the_same_stretch_ratio_as_the_body_columns(self):
+        # The whole point of splitting top_bar into two groups was so it
+        # visually lines up with the body columns underneath -- assert the
+        # stretch factors actually match, not just that they're "close".
+        outer = self.form.centralWidget().layout()
+        top_bar_row = outer.itemAt(0).layout()
+        self.assertEqual(top_bar_row.stretch(0), _LEFT_COLUMN_STRETCH)
+        self.assertEqual(top_bar_row.stretch(2), _RIGHT_COLUMN_STRETCH)
+
+        columns = outer.itemAt(2).layout()
+        self.assertEqual(columns.stretch(0), _LEFT_COLUMN_STRETCH)
+        self.assertEqual(columns.stretch(2), _RIGHT_COLUMN_STRETCH)
+
+    def test_no_button_was_dropped_or_duplicated_by_the_regrouping(self):
+        outer = self.form.centralWidget().layout()
+        top_bar_row = outer.itemAt(0).layout()
+        left_layout = top_bar_row.itemAt(0).layout()
+        right_layout = top_bar_row.itemAt(2).layout()
+
+        def _widgets_in(layout):
+            widgets = []
+            for i in range(layout.count()):
+                item = layout.itemAt(i)
+                if item.widget() is not None:
+                    widgets.append(item.widget())
+            return widgets
+
+        all_buttons = _widgets_in(left_layout) + _widgets_in(right_layout)
+        expected = [
+            self.form.records_btn,
+            self.form.prev_record_btn,
+            self.form.next_record_btn,
+            self.form.new_btn,
+            self.form.save_btn,
+            self.form.printer_settings_btn,
+            self.form.manage_users_btn,
+            self.form.print_preview_btn,
+            self.form.print_btn,
+            self.form.view_receipt_btn,
+            self.form.print_receipt_btn,
+        ]
+        self.assertEqual(len(all_buttons), len(expected))
+        self.assertCountEqual(all_buttons, expected)
 
 
 class BiggerEverythingStylesheetTest(unittest.TestCase):

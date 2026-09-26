@@ -164,6 +164,34 @@ confirmed it should never be typed by hand, unlike Issued Document Number.
 The receipt's logo/exact layout still needs the real LAA seal image
 Georgio is sending separately -- see assets/README.md; the feature works
 correctly without it in the meantime (text header only).
+
+2026-09-26 (later the same day): adding View/Print Receipt made the top
+bar overflow -- Print Receipt was getting cut off at the window's right
+edge (Georgio sent a screenshot showing exactly this). Georgio then sent
+photos of LAA's own screen showing the layout to match: a narrower record/
+field panel on the left and a wider button panel on the right, split by a
+vertical divider, with the toolbar aligned to that same split rather than
+one flat row spanning the whole window. Restructured to match:
+
+1. The single flat `top_bar` is now two separate QHBoxLayouts --
+   top_bar_left (record navigation: Find/Reprint, Previous, Next) sits
+   above the left column, top_bar_right (everything else: New, Save,
+   Printer Settings, Manage Staff Accounts, Print Preview, Print, View
+   Receipt, Print Receipt) sits above the right column -- combined into
+   one row (top_bar_row) using the SAME stretch ratio as the body columns
+   below so the two rows visually line up.
+2. The body columns' stretch ratio flipped from left=2/right=1 to
+   left=2/right=3 -- the reference photos show the button/output side
+   noticeably WIDER than the field side, the opposite of what this screen
+   had. This is what actually fixes the overflow: the buttons now have
+   real room instead of being squeezed into a third of the window.
+3. A thin vertical QFrame divider (_column_divider) sits between the two
+   top-bar groups and extends down between the two body columns, matching
+   the reference photos' visible split line.
+
+No button was renamed, added, or had its signal connection changed --
+this is purely a container/layout regrouping, see
+tests/test_new_idl_form_layout.py's ToolbarLayoutTest.
 """
 
 import logging
@@ -281,6 +309,19 @@ BASE_STYLESHEET = """
 # back after "New" the same way Issued Document.Date's today-default does.
 DEFAULT_PLACE_OF_ISSUE = "CGCV"
 
+# 2026-09-26 ("fix the layout of the upper part of the app / make the left
+# side less smaller in width and use the right part for the buttons we
+# have"): the body's left column (record fields) and right column (ID
+# photos + top-bar's output/settings buttons) used to split 2:1 in the
+# left column's favor -- the opposite of Georgio's reference photos of
+# LAA's own screen, which show a narrower field panel and a wider
+# button/output panel. Named constants (rather than inline numbers) since
+# both the top bar row and the body columns row must use the SAME ratio
+# for the two rows to visually line up -- see __init__'s top_bar_row and
+# columns.addWidget/addLayout calls below.
+_LEFT_COLUMN_STRETCH = 2
+_RIGHT_COLUMN_STRETCH = 3
+
 # 2026-09-14: found in real use the day after DEFAULT_PLACE_OF_ISSUE was
 # added -- ocr/pipeline.py's "Original Document.Place of Issue" (license
 # field 4c, the issuing-authority box) reads whatever is actually PRINTED
@@ -392,7 +433,17 @@ class NewIDLForm(QMainWindow):
         # (see printing/print_dispatch.py and printer_config.py) — kept
         # deliberately separate from Print Preview so staff always get one
         # more look before a real blank booklet page gets used.
-        top_bar = QHBoxLayout()
+        # 2026-09-26 (see this module's docstring, "later the same day"):
+        # split into top_bar_left/top_bar_right instead of one flat row --
+        # Print Receipt was getting cut off at the window's right edge.
+        # top_bar_left sits above the (now narrower) left field column,
+        # top_bar_right sits above the (now wider) right column, matching
+        # the two-panel split Georgio's reference photos of LAA's own
+        # screen show. Both are combined into top_bar_row further below
+        # using the SAME stretch ratio as the body `columns` layout so the
+        # toolbar visually lines up with the columns underneath it.
+        top_bar_left = QHBoxLayout()
+        top_bar_right = QHBoxLayout()
         self.records_btn = QPushButton("Find / Reprint Record...")
         self.records_btn.clicked.connect(self.open_records_screen)
         # 2026-09-19: "◀ Previous"/"Next ▶" — step straight to the
@@ -438,19 +489,36 @@ class NewIDLForm(QMainWindow):
         self.view_receipt_btn.clicked.connect(self.view_receipt)
         self.print_receipt_btn = QPushButton("Print Receipt")
         self.print_receipt_btn.clicked.connect(self.print_receipt_to_printer)
-        top_bar.addWidget(self.records_btn)
-        top_bar.addWidget(self.prev_record_btn)
-        top_bar.addWidget(self.next_record_btn)
-        top_bar.addWidget(self.printer_settings_btn)
-        top_bar.addWidget(self.manage_users_btn)
-        top_bar.addStretch()
-        top_bar.addWidget(self.new_btn)
-        top_bar.addWidget(self.save_btn)
-        top_bar.addWidget(self.print_preview_btn)
-        top_bar.addWidget(self.print_btn)
-        top_bar.addWidget(self.view_receipt_btn)
-        top_bar.addWidget(self.print_receipt_btn)
-        outer.addLayout(top_bar)
+        # Left group: browsing/creating/saving a record -- mirrors the
+        # reference photos' left panel (New/Clone/Prev/Next/Edit/etc.).
+        top_bar_left.addWidget(self.records_btn)
+        top_bar_left.addWidget(self.prev_record_btn)
+        top_bar_left.addWidget(self.next_record_btn)
+        top_bar_left.addWidget(self.new_btn)
+        top_bar_left.addWidget(self.save_btn)
+        top_bar_left.addStretch()
+        # Right group: output/settings actions -- mirrors the reference
+        # photos' right panel (Print/View Licence, Print/View Receipt...).
+        top_bar_right.addWidget(self.printer_settings_btn)
+        top_bar_right.addWidget(self.manage_users_btn)
+        top_bar_right.addWidget(self.print_preview_btn)
+        top_bar_right.addWidget(self.print_btn)
+        top_bar_right.addWidget(self.view_receipt_btn)
+        top_bar_right.addWidget(self.print_receipt_btn)
+        top_bar_right.addStretch()
+
+        # Thin vertical divider between the two panels, echoed again
+        # between the body columns below -- matches the visible split line
+        # in Georgio's reference photos of LAA's own screen.
+        self._top_bar_divider = QFrame()
+        self._top_bar_divider.setFrameShape(QFrame.VLine)
+        self._top_bar_divider.setFrameShadow(QFrame.Sunken)
+
+        top_bar_row = QHBoxLayout()
+        top_bar_row.addLayout(top_bar_left, _LEFT_COLUMN_STRETCH)
+        top_bar_row.addWidget(self._top_bar_divider)
+        top_bar_row.addLayout(top_bar_right, _RIGHT_COLUMN_STRETCH)
+        outer.addLayout(top_bar_row)
 
         self.title_label = QLabel("Creating New IDL")
         self.title_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #1a5fb4;")
@@ -496,7 +564,15 @@ class NewIDLForm(QMainWindow):
         # mouse wheel and its default "as needed" scrollbar regardless of
         # this policy setting -- that part needed no change, just this
         # cosmetic one reverted.
-        columns.addWidget(left_scroll, stretch=2)
+        columns.addWidget(left_scroll, stretch=_LEFT_COLUMN_STRETCH)
+
+        # Same vertical divider as top_bar_row's, continuing the visible
+        # split line down between the two body columns -- matches
+        # Georgio's reference photos of LAA's own screen.
+        self._column_divider = QFrame()
+        self._column_divider.setFrameShape(QFrame.VLine)
+        self._column_divider.setFrameShadow(QFrame.Sunken)
+        columns.addWidget(self._column_divider)
 
         # --- Personal details (matches LAA's top field group)
         # 2026-09-14: trimmed from LAA's full field set (which also has
@@ -623,7 +699,7 @@ class NewIDLForm(QMainWindow):
 
         # --- Right column: the three labeled upload boxes + Autofill button
         right_column = QVBoxLayout()
-        columns.addLayout(right_column, stretch=1)
+        columns.addLayout(right_column, stretch=_RIGHT_COLUMN_STRETCH)
 
         upload_box_group = QGroupBox("ID Photos")
         upload_box_group_layout = QVBoxLayout(upload_box_group)
