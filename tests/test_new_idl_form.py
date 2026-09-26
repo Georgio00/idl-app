@@ -1018,5 +1018,124 @@ class PrintReceiptTest(unittest.TestCase):
         mock_box.critical.assert_called_once()
 
 
+class ViewFormTest(unittest.TestCase):
+    """Regression coverage for view_form (added 2026-09-26, "we still need
+    to add the print form option and view form") -- mirrors ViewReceiptTest
+    above, but for the "Application for I D L" template
+    (printing/form_page.py) rendered from the photographed paper form.
+    Unlike Receipt, there's no auto-generated number here."""
+
+    def setUp(self):
+        self.form = _make_form()
+        self.form.fields["Surname"].setText("KORDAHI")
+        self.tmp_dir = Path(tempfile.mkdtemp())
+
+    def test_renders_and_opens_the_form_pdf(self):
+        with mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.form_page.render_form_from_form_fields") as mock_render, \
+             mock.patch("gui.new_idl_form.os.startfile", create=True) as mock_startfile, \
+             mock.patch("db.audit_log.log_form_view"):
+            self.form.view_form()
+
+        mock_render.assert_called_once()
+        mock_startfile.assert_called_once()
+
+    def test_never_persists_the_record(self):
+        with mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.form_page.render_form_from_form_fields"), \
+             mock.patch("gui.new_idl_form.os.startfile", create=True), \
+             mock.patch("db.audit_log.log_form_view"):
+            self.form.view_form()
+
+        self.form.storage.save_record.assert_not_called()
+        self.form.storage.update_record.assert_not_called()
+
+    def test_a_render_failure_shows_an_error_and_does_not_open_anything(self):
+        with mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.form_page.render_form_from_form_fields", side_effect=RuntimeError("boom")), \
+             mock.patch("gui.new_idl_form.os.startfile", create=True) as mock_startfile, \
+             mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.view_form()
+
+        mock_box.critical.assert_called_once()
+        mock_startfile.assert_not_called()
+
+
+class PrintFormTest(unittest.TestCase):
+    """Regression coverage for print_form_to_printer (added 2026-09-26) --
+    mirrors PrintReceiptTest above, but for the "Application for I D L"
+    page and its own, separate form printer setting."""
+
+    def setUp(self):
+        self.form = _make_form()
+        self.form.fields["Surname"].setText("KORDAHI")
+        self.form.fields["Issued Document.Number"].setText("344629")
+        self.form.storage.save_record.return_value = 5
+        self.tmp_dir = Path(tempfile.mkdtemp())
+
+    def test_persists_the_record_before_dispatching(self):
+        with mock.patch("gui.new_idl_form.get_configured_printer_name", return_value="Front Desk Printer") as mock_get_printer, \
+             mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.form_page.render_form_from_form_fields") as mock_render, \
+             mock.patch("printing.print_dispatch.print_pdf_to_printer") as mock_print, \
+             mock.patch("db.audit_log.log_form_dispatched"), \
+             mock.patch("db.audit_log.log_form_dispatch_failed"), \
+             mock.patch("gui.new_idl_form.QMessageBox"):
+            self.form.print_form_to_printer()
+
+        mock_get_printer.assert_called_once_with(purpose="form")
+        self.form.storage.save_record.assert_called_once()
+        mock_render.assert_called_once()
+        mock_print.assert_called_once()
+
+    def test_uses_the_form_printer_setting_not_the_booklet_or_receipt_one(self):
+        with mock.patch("gui.new_idl_form.get_configured_printer_name", return_value=None) as mock_get_printer, \
+             mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.print_form_to_printer()
+
+        mock_get_printer.assert_called_once_with(purpose="form")
+        mock_box.warning.assert_called_once()
+        self.form.storage.save_record.assert_not_called()
+
+    def test_does_not_dispatch_when_issued_document_number_is_missing(self):
+        self.form.fields["Issued Document.Number"].setText("")
+        with mock.patch("gui.new_idl_form.get_configured_printer_name", return_value="Front Desk Printer"), \
+             mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.form_page.render_form_from_form_fields") as mock_render, \
+             mock.patch("printing.print_dispatch.print_pdf_to_printer") as mock_print, \
+             mock.patch("gui.new_idl_form.QMessageBox"):
+            self.form.print_form_to_printer()
+
+        self.form.storage.save_record.assert_not_called()
+        mock_render.assert_not_called()
+        mock_print.assert_not_called()
+
+    def test_does_not_show_the_booklet_pages_confirm_dialog(self):
+        with mock.patch("gui.new_idl_form.get_configured_printer_name", return_value="Front Desk Printer"), \
+             mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.form_page.render_form_from_form_fields"), \
+             mock.patch("printing.print_dispatch.print_pdf_to_printer"), \
+             mock.patch("db.audit_log.log_form_dispatched"), \
+             mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.print_form_to_printer()
+
+        mock_box.question.assert_not_called()
+
+    def test_a_dispatch_failure_is_logged_and_shown_but_does_not_crash(self):
+        with mock.patch("gui.new_idl_form.get_configured_printer_name", return_value="Front Desk Printer"), \
+             mock.patch("gui.new_idl_form.APP_DATA_DIR", self.tmp_dir), \
+             mock.patch("printing.form_page.render_form_from_form_fields"), \
+             mock.patch(
+                 "printing.print_dispatch.print_pdf_to_printer",
+                 side_effect=RuntimeError("printer offline"),
+             ), \
+             mock.patch("db.audit_log.log_form_dispatch_failed") as mock_log_failed, \
+             mock.patch("gui.new_idl_form.QMessageBox") as mock_box:
+            self.form.print_form_to_printer()
+
+        mock_log_failed.assert_called_once()
+        mock_box.critical.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

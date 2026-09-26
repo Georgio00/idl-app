@@ -265,6 +265,44 @@ def log_receipt_dispatch_failed(record_id: int | None, printer_name: str, messag
     }))
 
 
+# -- Application for I D L form (2026-09-26, see gui/new_idl_form.py's ------
+# view_form/print_form_to_printer and printing/form_page.py) -- same
+# shape as the Cash Receipt events above, again with its own distinct
+# event names so a booklet page, a receipt, and this form stay
+# distinguishable when reading/grepping this log later.
+
+def log_form_view(record_id: int | None, output_path: str) -> None:
+    """Logs a PREVIEW render (opened in a PDF viewer for a visual check --
+    see gui/new_idl_form.py's view_form) -- nothing physically printed
+    yet. See log_form_dispatched for an actual send-to-printer event."""
+    _logger.info(_kv({
+        "event": "form_rendered",
+        "user": _user(),
+        "record_id": record_id if record_id is not None else "unsaved",
+        "output_path": output_path,
+    }))
+
+
+def log_form_dispatched(record_id: int | None, printer_name: str, output_path: str) -> None:
+    _logger.info(_kv({
+        "event": "form_dispatched",
+        "user": _user(),
+        "record_id": record_id if record_id is not None else "unsaved",
+        "printer": printer_name,
+        "output_path": output_path,
+    }))
+
+
+def log_form_dispatch_failed(record_id: int | None, printer_name: str, message: str) -> None:
+    _logger.info(_kv({
+        "event": "form_dispatch_failed",
+        "user": _user(),
+        "record_id": record_id if record_id is not None else "unsaved",
+        "printer": printer_name,
+        "message": message,
+    }))
+
+
 def log_update_available(current_version: str, new_version: str) -> None:
     """2026-09-11: the auto-updater (see updater/) found a newer version
     on startup and is about to show staff the "Update available?" prompt

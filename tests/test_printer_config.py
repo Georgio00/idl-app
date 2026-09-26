@@ -97,6 +97,21 @@ class PrinterPurposeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             printer_config.set_configured_printer_name("Something", purpose="fax")
 
+    def test_form_purpose_starts_unconfigured_even_when_others_are_set(self):
+        # 2026-09-26 (later, same day): "form" added for "Print Form"
+        # (printing/form_page.py) the same way "receipt" was added earlier.
+        printer_config.set_configured_printer_name("Booklet Tray Printer", purpose="booklet")
+        printer_config.set_configured_printer_name("Front Desk Printer", purpose="receipt")
+        self.assertIsNone(printer_config.get_configured_printer_name(purpose="form"))
+
+    def test_setting_form_does_not_clobber_booklet_or_receipt(self):
+        printer_config.set_configured_printer_name("Booklet Tray Printer", purpose="booklet")
+        printer_config.set_configured_printer_name("Front Desk Printer", purpose="receipt")
+        printer_config.set_configured_printer_name("Back Office Printer", purpose="form")
+        self.assertEqual(printer_config.get_configured_printer_name(purpose="booklet"), "Booklet Tray Printer")
+        self.assertEqual(printer_config.get_configured_printer_name(purpose="receipt"), "Front Desk Printer")
+        self.assertEqual(printer_config.get_configured_printer_name(purpose="form"), "Back Office Printer")
+
 
 class ListAvailablePrintersTest(unittest.TestCase):
     def test_parses_one_printer_per_line(self):

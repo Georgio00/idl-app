@@ -230,6 +230,25 @@ Settings/Manage Staff Accounts -- which have no colored counterpart in
 the reference photo -- stay a neutral grey. No button's text, tooltip, or
 signal connection changed; see tests/test_icons.py and
 tests/test_new_idl_form_layout.py's ToolbarIconsTest.
+
+2026-09-26 (yet later, same day): "we still need to add the print form
+option and view form" -- Georgio then sent a photograph of the actual
+paper form (a printed "Application for I D L" record for KORDAHI KARIM),
+completing the third Print/View pair from his earlier video/photos
+(Print/View Licence, Print/View Receipt, and now Print/View Form). Added
+"View Form"/"Print Form" (view_form/print_form_to_printer) the same way
+View/Print Receipt were added: printing/form_page.py renders the entire
+photographed page (title, personal details, both hatched section
+dividers, Original/Issued Document, Signature -- see that module's
+docstring for the full layout read directly off the photo), its own
+independent printer setting (printing/printer_config.py's purpose="form",
+gui/printer_settings_dialog.py's third section) since this is again a
+complete self-contained plain-paper page and not the pre-printed booklet,
+and RED icons (gui/icons.py) matching that family's color in the
+reference photos. Unlike Receipt, there's no auto-generated "No." field
+here -- the photographed form has nothing analogous to print, so
+view_form/print_form_to_printer are otherwise a straight mirror of
+view_receipt/print_receipt_to_printer with that one piece left out.
 """
 
 import logging
@@ -253,7 +272,7 @@ from db.audit_log import (
 )
 from db.storage import APP_DATA_DIR, Storage
 from gui.flow_layout import FlowLayout
-from gui.icons import BLUE, GREEN, NEUTRAL, make_icon
+from gui.icons import BLUE, GREEN, NEUTRAL, RED, make_icon
 from gui.image_upload_box import ImageUploadBox
 from gui.login_dialog import run_login
 from gui.manage_users_dialog import ManageUsersDialog
@@ -542,6 +561,16 @@ class NewIDLForm(QMainWindow):
         self.view_receipt_btn.clicked.connect(self.view_receipt)
         self.print_receipt_btn = QPushButton("Print Receipt")
         self.print_receipt_btn.clicked.connect(self.print_receipt_to_printer)
+        # 2026-09-26 (later, same day): "View Form"/"Print Form" -- the
+        # third pair from Georgio's video/photos of LAA's own screen,
+        # alongside Print Preview/Print (Licence) and View/Print Receipt
+        # above. See view_form/print_form_to_printer and
+        # printing/form_page.py (the "Application for I D L" page,
+        # rendered from a photo of the actual paper form Georgio sent).
+        self.view_form_btn = QPushButton("View Form")
+        self.view_form_btn.clicked.connect(self.view_form)
+        self.print_form_btn = QPushButton("Print Form")
+        self.print_form_btn.clicked.connect(self.print_form_to_printer)
 
         # 2026-09-26 ("add icons like the ones in the image i gave you"):
         # see gui/icons.py's docstring for the color language this mirrors
@@ -564,6 +593,8 @@ class NewIDLForm(QMainWindow):
             self.print_btn: ("printer", BLUE),
             self.view_receipt_btn: ("eye", GREEN),
             self.print_receipt_btn: ("printer", GREEN),
+            self.view_form_btn: ("eye", RED),
+            self.print_form_btn: ("printer", RED),
         }
         for button, (kind, color) in _TOOLBAR_ICONS.items():
             button.setIcon(make_icon(kind, color))
@@ -584,6 +615,8 @@ class NewIDLForm(QMainWindow):
         top_bar_right.addWidget(self.print_btn)
         top_bar_right.addWidget(self.view_receipt_btn)
         top_bar_right.addWidget(self.print_receipt_btn)
+        top_bar_right.addWidget(self.view_form_btn)
+        top_bar_right.addWidget(self.print_form_btn)
         # FlowLayout has no addStretch (that's QBoxLayout-specific) -- it
         # doesn't need one, since unlike a QHBoxLayout it never leaves
         # buttons squeezed against unused trailing space in a way stretch
@@ -1447,6 +1480,79 @@ class NewIDLForm(QMainWindow):
             return
 
         log_receipt_dispatched(self.current_record_id, printer_name, output_path)
+        QMessageBox.information(self, "Sent to printer", f"Sent to {printer_name}.")
+
+    def view_form(self):
+        """Renders the current form's data onto the "Application for I D L"
+        template (see printing/form_page.py) and opens it for a visual
+        check -- same "preview only, live field text, no save required"
+        contract as print_preview/view_receipt above, mirroring LAA's own
+        "View Form"/"View Licence"/"View Receipt" trio (Georgio's
+        2026-09-26 video and the photographed paper form he sent the same
+        day). Unlike view_receipt, there's no auto-generated number to
+        assign here -- the photographed form has no equivalent of the
+        receipt's "No." field."""
+        from db.audit_log import log_form_view
+        from printing.form_page import render_form_from_form_fields
+
+        plain_values = {key: edit.text() for key, edit in self.fields.items()}
+
+        APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = str(APP_DATA_DIR / "form_preview.pdf")
+        try:
+            render_form_from_form_fields(plain_values, output_path)
+        except Exception as e:  # noqa: BLE001 - surface any failure rather than a silent no-op
+            QMessageBox.critical(self, "Form preview failed", f"Could not generate the form PDF: {e}")
+            return
+
+        log_form_view(self.current_record_id, output_path)
+        os.startfile(output_path)  # Windows-only -- matches this app's target platform
+
+    def print_form_to_printer(self):
+        """Sends the current record's "Application for I D L" page straight
+        to the configured FORM printer -- its own independent printer
+        setting (printing/printer_config.py's purpose="form"), same
+        reasoning as print_receipt_to_printer's own docstring: this is a
+        complete, self-contained plain-paper page, not the pre-printed
+        booklet tray, so sharing either existing printer setting would
+        risk sending it to the wrong physical printer.
+
+        Same persist-before-print contract as print_to_printer/
+        print_receipt_to_printer above (see either's docstring for why):
+        the record is saved first, so a form that was actually handed to a
+        client always has a matching saved record, even if the physical
+        print then fails for an unrelated reason. Deliberately skips
+        print_to_printer's "have you checked Print Preview?" confirmation
+        dialog too, same as print_receipt_to_printer -- that exists
+        specifically because wasting a pre-printed blank booklet page is
+        costly; an ordinary sheet of plain paper isn't."""
+        from db.audit_log import log_form_dispatch_failed, log_form_dispatched
+        from printing.form_page import render_form_from_form_fields
+        from printing.print_dispatch import print_pdf_to_printer
+
+        printer_name = get_configured_printer_name(purpose="form")
+        if not printer_name:
+            QMessageBox.warning(
+                self, "No form printer configured",
+                "Set a form printer first via \"Printer Settings...\" before printing.",
+            )
+            return
+
+        if self._persist_record() is None:
+            return  # validation failed; _persist_record already explained why
+
+        plain_values = {key: edit.text() for key, edit in self.fields.items()}
+        APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        output_path = str(APP_DATA_DIR / "form_dispatch_last.pdf")
+        try:
+            render_form_from_form_fields(plain_values, output_path)
+            print_pdf_to_printer(output_path, printer_name)
+        except Exception as e:  # noqa: BLE001 - surface any failure (PrintDispatchError or otherwise), never a silent no-op
+            log_form_dispatch_failed(self.current_record_id, printer_name, str(e))
+            QMessageBox.critical(self, "Print failed", f"Could not print to {printer_name!r}: {e}")
+            return
+
+        log_form_dispatched(self.current_record_id, printer_name, output_path)
         QMessageBox.information(self, "Sent to printer", f"Sent to {printer_name}.")
 
     def run_autofill(self):

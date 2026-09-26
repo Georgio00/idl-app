@@ -43,6 +43,8 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
 # repeating raw hex codes at each call site.
 BLUE = "#1f6fd8"       # Licence / print-preview family (Print/View Licence)
 GREEN = "#2e9e44"      # Receipt family (Print/View Receipt)
+RED = "#d3392e"        # Form family (Print/View Form) -- added 2026-09-26
+                       # once Georgio's photos included that pair too
 NEUTRAL = "#5a6472"    # Generic actions with no colored counterpart in
                        # the reference photo (Save, Printer Settings,
                        # Manage Staff Accounts)

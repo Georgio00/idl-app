@@ -33,6 +33,12 @@ this change keeps working with no migration needed; `purpose="receipt"`
 reads/writes a new, separate `receipt_printer_name` key that's simply
 absent (== unconfigured, same None-means-never-configured contract as
 before) until Printer Settings is used to set one.
+
+2026-09-26 (later, same day): added `purpose="form"` the same way, for
+"Print Form" (printing/form_page.py, the "Application for I D L" page) --
+also a complete, self-contained plain-paper page like the receipt, not
+the pre-printed booklet, so it gets its own independent
+`form_printer_name` key rather than sharing either existing setting.
 """
 
 from __future__ import annotations
@@ -51,6 +57,7 @@ PRINTER_CONFIG_PATH = APP_DATA_DIR / "printer_config.json"
 _PURPOSE_KEYS = {
     "booklet": "printer_name",
     "receipt": "receipt_printer_name",
+    "form": "form_printer_name",
 }
 
 
@@ -67,8 +74,9 @@ def get_configured_printer_name(purpose: str = "booklet") -> str | None:
     silently falling back to the OS default printer, since sending a real
     IDL page to the wrong printer/tray wastes a pre-printed blank booklet
     page, which isn't like wasting a sheet of scratch paper. `purpose`
-    selects which of the two independent settings to read -- "booklet"
-    (the default, unchanged from before receipts existed) or "receipt"."""
+    selects which of the independent settings to read -- "booklet" (the
+    default, unchanged from before receipts/forms existed), "receipt", or
+    "form"."""
     key = _config_key(purpose)
     if not PRINTER_CONFIG_PATH.exists():
         return None

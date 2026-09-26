@@ -23,6 +23,12 @@ independently optional to fill in at any given time — leaving one blank
 just means that purpose stays "not configured yet" (its own printer button
 will prompt for it, same as before this change), not a validation error
 here.
+
+2026-09-26 (later, same day): added a THIRD section, same pattern, for
+"Print Form" (printing/form_page.py's "Application for I D L" page) —
+also a complete, self-contained plain-paper page like the receipt, so it
+gets its own independent printer setting rather than sharing either
+existing one.
 """
 
 from __future__ import annotations
@@ -123,6 +129,16 @@ class PrinterSettingsDialog(QDialog):
             ),
         )
 
+        layout.addSpacing(12)
+
+        self.form_choice = _PrinterChoice(
+            self, layout, purpose="form",
+            description=(
+                "Choose the printer for the Application for IDL form\n"
+                "(plain paper) -- also separate from the settings above."
+            ),
+        )
+
         button_row = QHBoxLayout()
         save_btn = QPushButton("Save")
         save_btn.clicked.connect(self._save)
@@ -138,7 +154,7 @@ class PrinterSettingsDialog(QDialog):
         # just leaves that purpose "not configured yet" (its own printer
         # button already prompts for that when clicked), not a reason to
         # block saving the OTHER purpose someone actually did fill in.
-        for choice in (self.booklet_choice, self.receipt_choice):
+        for choice in (self.booklet_choice, self.receipt_choice, self.form_choice):
             name = choice.resolved_name()
             if name and name.startswith("("):
                 QMessageBox.warning(
@@ -147,7 +163,7 @@ class PrinterSettingsDialog(QDialog):
                 )
                 return
 
-        for choice in (self.booklet_choice, self.receipt_choice):
+        for choice in (self.booklet_choice, self.receipt_choice, self.form_choice):
             name = choice.resolved_name()
             if name and not name.startswith("("):
                 choice.save()

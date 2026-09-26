@@ -204,6 +204,8 @@ class ToolbarLayoutTest(unittest.TestCase):
         self.assertIn(self.form.print_btn, _widgets_in(right_layout))
         self.assertIn(self.form.view_receipt_btn, _widgets_in(right_layout))
         self.assertIn(self.form.print_receipt_btn, _widgets_in(right_layout))
+        self.assertIn(self.form.view_form_btn, _widgets_in(right_layout))
+        self.assertIn(self.form.print_form_btn, _widgets_in(right_layout))
 
         del nav_group, output_group, nav_layout  # only used to document intent above
 
@@ -247,6 +249,8 @@ class ToolbarLayoutTest(unittest.TestCase):
             self.form.print_btn,
             self.form.view_receipt_btn,
             self.form.print_receipt_btn,
+            self.form.view_form_btn,
+            self.form.print_form_btn,
         ]
         self.assertEqual(len(all_buttons), len(expected))
         self.assertCountEqual(all_buttons, expected)
@@ -274,6 +278,8 @@ class ToolbarIconsTest(unittest.TestCase):
             self.form.print_btn,
             self.form.view_receipt_btn,
             self.form.print_receipt_btn,
+            self.form.view_form_btn,
+            self.form.print_form_btn,
         ]
         for button in buttons:
             self.assertFalse(button.icon().isNull(), button.text())
@@ -304,6 +310,32 @@ class ToolbarIconsTest(unittest.TestCase):
         self.assertTrue(receipt_colors, "view/print receipt icons painted nothing opaque")
         self.assertTrue(print_colors, "print icon painted nothing opaque")
         self.assertEqual(receipt_colors & print_colors, set())
+
+    def test_form_buttons_are_a_third_distinct_color_from_receipt_and_print(self):
+        # 2026-09-26 ("print form option and view form"): Form is a THIRD
+        # family (red in the reference photos), distinct from both Receipt
+        # (green) and Licence/Print (blue).
+        from PySide6.QtGui import QImage
+
+        def _opaque_pixel_colors(button):
+            image = button.icon().pixmap(18, 18).toImage().convertToFormat(QImage.Format_RGBA8888)
+            colors = set()
+            for y in range(image.height()):
+                for x in range(image.width()):
+                    pixel = image.pixelColor(x, y)
+                    if pixel.alpha() > 200:
+                        colors.add((pixel.red(), pixel.green(), pixel.blue()))
+            return colors
+
+        form_colors = _opaque_pixel_colors(self.form.view_form_btn) | _opaque_pixel_colors(self.form.print_form_btn)
+        receipt_colors = _opaque_pixel_colors(self.form.view_receipt_btn) | _opaque_pixel_colors(
+            self.form.print_receipt_btn
+        )
+        print_colors = _opaque_pixel_colors(self.form.print_btn)
+
+        self.assertTrue(form_colors, "view/print form icons painted nothing opaque")
+        self.assertEqual(form_colors & receipt_colors, set())
+        self.assertEqual(form_colors & print_colors, set())
 
 
 class BiggerEverythingStylesheetTest(unittest.TestCase):
