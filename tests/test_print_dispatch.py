@@ -103,6 +103,23 @@ class PrintPdfToPrinterTest(unittest.TestCase):
         self.assertIn("-silent", args)
         self.assertIn(str(self.pdf_path), args)
 
+    def test_forces_portrait_so_the_printer_cannot_auto_rotate_to_landscape(self):
+        # 2026-09-29: every page this app renders is portrait-shaped (see
+        # print_page.py/receipt_page.py/form_page.py); without an explicit
+        # -print-settings, SumatraPDF may auto-rotate 90 degrees based on
+        # the target printer's own default paper orientation, which is
+        # what Georgio saw happen on a real booklet printer.
+        fake_sumatra = r"C:\Tools\SumatraPDF.exe"
+        fake_result = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        with mock.patch("printing.print_dispatch.find_sumatra_exe", return_value=fake_sumatra), \
+             mock.patch("subprocess.run", return_value=fake_result) as run_mock:
+            print_dispatch.print_pdf_to_printer(str(self.pdf_path), "Booklet Tray Printer")
+
+        args = run_mock.call_args.args[0]
+        self.assertIn("-print-settings", args)
+        settings_index = args.index("-print-settings")
+        self.assertEqual(args[settings_index + 1], "portrait")
+
     def test_timeout_raises_print_dispatch_error(self):
         with mock.patch("printing.print_dispatch.find_sumatra_exe", return_value="sumatra.exe"), \
              mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="sumatra", timeout=60)):

@@ -32,6 +32,22 @@ unit-tested (with subprocess mocked, see tests/test_print_dispatch.py)
 from an environment with no printer to test against at all. The first
 real print to the actual dedicated printer/tray needs to be watched in
 person before trusting this for real booklet pages.
+
+2026-09-29: Georgio reported booklet-page prints coming out landscape
+instead of portrait. Every page this app renders (the booklet data page
+in print_page.py at 70x105mm, and the receipt/form pages in
+receipt_page.py/form_page.py at A4) is built as a portrait-shaped PDF --
+nothing in this codebase ever asks for landscape. Per SumatraPDF's own
+docs (https://www.sumatrapdfreader.org/docs/Printing), when no
+-print-settings are passed it will auto-rotate a page 90 degrees "to fit
+the paper" based on the target printer's currently configured paper
+size/orientation -- which is exactly the visible symptom, and explains
+why this only showed up on a real printer (nothing here mocks that
+auto-rotation heuristic). Since every page we ever generate is meant to
+print portrait, we now always pass `-print-settings "portrait"` so
+SumatraPDF forces portrait output regardless of what a given printer's
+saved driver default happens to be, instead of relying on it guessing
+right.
 """
 
 from __future__ import annotations
@@ -109,7 +125,12 @@ def print_pdf_to_printer(pdf_path: str, printer_name: str, timeout_seconds: floa
 
     try:
         subprocess.run(
-            [sumatra_path, "-print-to", printer_name, "-silent", "-exit-when-done", pdf_path],
+            [
+                sumatra_path,
+                "-print-to", printer_name,
+                "-print-settings", "portrait",
+                "-silent", "-exit-when-done", pdf_path,
+            ],
             capture_output=True, text=True, timeout=timeout_seconds, check=True,
         )
     except subprocess.TimeoutExpired as e:
