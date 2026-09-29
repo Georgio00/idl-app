@@ -118,16 +118,28 @@ class PairedRowLayoutTest(unittest.TestCase):
         amount_row = _grid_row(self.form.fields["Receipt.Amount(LBP)"])
         self.assertNotEqual(branch_row, amount_row)
 
-    def test_receipt_number_gets_its_own_row(self):
-        # 2026-09-26 ("Print Receipt"): "No." sits above Received from,
-        # on its own row -- not paired with anything, since there's no
-        # natural second field to pair it with the way Amount/Date and
-        # Branch/User are.
-        number_row = _grid_row(self.form.fields["Receipt.Number"])
+    def test_receipt_number_field_exists_but_has_no_row_on_this_screen(self):
+        # 2026-09-29 ("so no typed hand let's remove it"): the "No." row
+        # (added 2026-09-26) was removed from this screen once Georgio
+        # learned it was auto-generated, never typed by hand -- but the
+        # field itself still has to exist (view_receipt/
+        # print_receipt_to_printer/_ensure_receipt_number all still read/
+        # write it, and it still prints on the Cash Receipt -- see
+        # new_idl_form.py's docstring). Confirms it's a real QLineEdit
+        # parented under the Receipt group, but never actually added to
+        # that group's QGridLayout.
+        field = self.form.fields["Receipt.Number"]
+        self.assertIsNotNone(field)
+        grid = field.parentWidget().layout()
+        self.assertIsInstance(grid, QGridLayout)
+        self.assertEqual(grid.indexOf(field), -1)
+
+    def test_received_from_is_now_the_receipt_groups_first_row(self):
+        # Since "No." no longer occupies row 0, Received from moved up to
+        # take its place -- pins down the resulting row order rather than
+        # just "some row", now that there's one fewer row above it.
         received_from_row = _grid_row(self.form.fields["Receipt.Received from"])
-        amount_row = _grid_row(self.form.fields["Receipt.Amount(LBP)"])
-        branch_row = _grid_row(self.form.fields["Receipt.Branch"])
-        self.assertNotIn(number_row, (received_from_row, amount_row, branch_row))
+        self.assertEqual(received_from_row, 0)
 
     def test_personal_details_fields_are_not_on_a_grid_at_all(self):
         # Personal details deliberately stayed a plain QFormLayout (one

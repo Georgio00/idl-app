@@ -249,6 +249,19 @@ reference photos. Unlike Receipt, there's no auto-generated "No." field
 here -- the photographed form has nothing analogous to print, so
 view_form/print_form_to_printer are otherwise a straight mirror of
 view_receipt/print_receipt_to_printer with that one piece left out.
+
+2026-09-29: Georgio asked what the Receipt group's "No." field was for;
+once it was explained that it's auto-generated and never typed by hand
+(see _ensure_receipt_number's own docstring), he asked to remove it from
+this screen. Removed the "No." ROW from receipt_grid -- but the
+underlying self.fields["Receipt.Number"] QLineEdit still exists (it's
+constructed with receipt_box as its Qt parent, just never added to the
+grid), since view_receipt/print_receipt_to_printer/_ensure_receipt_number/
+_load_record/_clone_record/reset_to_new_record all still read or write it
+as an ordinary field, and the auto-generated number still prints on the
+Cash Receipt itself (printing/receipt_page.py) exactly as before -- only
+the visible row on THIS data-entry screen is gone, matching LAA's own
+screen (which never showed this field here either).
 """
 
 import logging
@@ -784,18 +797,33 @@ class NewIDLForm(QMainWindow):
         # --- Receipt group
         receipt_box = QGroupBox("Receipt")
         receipt_grid = QGridLayout()
-        # 2026-09-26: "No." -- the receipt's own printed serial (see this
-        # module's docstring's "Print Receipt" paragraph and
-        # _ensure_receipt_number). READ-ONLY and auto-generated the first
-        # time View/Print Receipt is used for this record, same treatment
-        # as Receipt.User just below -- LAA's own screen has no visible
-        # field for this at all, but showing it here (rather than hiding
-        # it off-form entirely) lets staff actually see which number a
-        # printed receipt got, which matters for reconciling a physical
-        # receipt book against this app later.
-        _add_full_row(receipt_grid, 0, "No.", "Receipt.Number", read_only=True)
-        _add_full_row(receipt_grid, 1, "Received from", "Receipt.Received from")
-        _add_paired_row(receipt_grid, 2, "Amount(LBP)", "Receipt.Amount(LBP)", "Date", "Receipt.Date")
+        # 2026-09-29 ("so no typed hand let's remove it"): the "No." row
+        # (added 2026-09-26, see this module's docstring's "Print Receipt"
+        # paragraph) is removed from THIS screen -- Georgio confirmed once
+        # it was explained that the field is auto-generated and never
+        # typed by hand, matching LAA's own screen (which never showed a
+        # "No." field here either). The auto-generated VALUE still exists
+        # and still gets printed on the Cash Receipt itself (see
+        # _ensure_receipt_number and printing/receipt_page.py) -- only the
+        # visible row here is gone. The QLineEdit still has to exist
+        # (view_receipt/print_receipt_to_printer/_ensure_receipt_number/
+        # _load_record/_clone_record/reset_to_new_record all read or write
+        # self.fields["Receipt.Number"] as an ordinary field), so it's
+        # constructed with receipt_box as its Qt parent for proper
+        # lifetime/cleanup, but deliberately never passed to
+        # receipt_grid.addWidget -- alive and fully working, just never
+        # shown or laid out on this form.
+        self.fields["Receipt.Number"] = QLineEdit(receipt_box)
+        self.fields["Receipt.Number"].setReadOnly(True)
+        self.fields["Receipt.Number"].setStyleSheet(READ_ONLY_FIELD_STYLE)
+        # A QWidget constructed with a parent is visible by default EVEN
+        # WITHOUT being added to that parent's layout -- it just renders
+        # at whatever default geometry (here, floating at (0,0) inside
+        # receipt_box) instead of being properly laid out. Not adding it
+        # to receipt_grid isn't enough on its own to hide it; this is.
+        self.fields["Receipt.Number"].hide()
+        _add_full_row(receipt_grid, 0, "Received from", "Receipt.Received from")
+        _add_paired_row(receipt_grid, 1, "Amount(LBP)", "Receipt.Amount(LBP)", "Date", "Receipt.Date")
         # 2026-09-19: "Branch"/"User" -- LAA's own screen shows both at the
         # bottom of this same group (see this module's docstring). Branch
         # is plain manually-typed text, same treatment as Phone/Email/
@@ -804,7 +832,7 @@ class NewIDLForm(QMainWindow):
         # staff login system added later the same day (see this module's
         # docstring), not typed by hand at all.
         _add_paired_row(
-            receipt_grid, 3, "Branch", "Receipt.Branch", "User", "Receipt.User", read_only2=True,
+            receipt_grid, 2, "Branch", "Receipt.Branch", "User", "Receipt.User", read_only2=True,
         )
         _set_value_column_stretch(receipt_grid)
         receipt_box.setLayout(receipt_grid)
